@@ -1,20 +1,30 @@
 import { useRef, useState } from "react";
+import type { AnalysisResult } from "../App";
 import AnalyzeModal from "./AnalyzeModal";
 
 function UploadPage({
   onAnalysisComplete,
 }: {
-  onAnalysisComplete: () => void;
+  onAnalysisComplete: (result: AnalysisResult) => void;
 }) {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(
+    null,
+  );
 
   const handleCancelAnalyze = () => {
     setIsAnalyzing(false);
+    setAnalysisResult(null);
   };
 
   const handleAnalysisComplete = () => {
+    if (!analysisResult) {
+      setIsAnalyzing(false);
+      return;
+    }
+
     setIsAnalyzing(false);
-    onAnalysisComplete();
+    onAnalysisComplete(analysisResult);
   };
 
   return (
@@ -66,7 +76,14 @@ function UploadPage({
           </div>
 
           <div className="lg:pt-[75px]">
-            <UploadCard onStartAnalyze={() => setIsAnalyzing(true)} />
+            <UploadCard
+              onAnalysisStart={() => setIsAnalyzing(true)}
+              onAnalysisSuccess={(result) => setAnalysisResult(result)}
+              onAnalysisFail={() => {
+                setIsAnalyzing(false);
+                setAnalysisResult(null);
+              }}
+            />
           </div>
         </section>
       </main>
@@ -74,7 +91,15 @@ function UploadPage({
   );
 }
 
-function UploadCard({ onStartAnalyze }: { onStartAnalyze: () => void }) {
+function UploadCard({
+  onAnalysisStart,
+  onAnalysisSuccess,
+  onAnalysisFail,
+}: {
+  onAnalysisStart: () => void;
+  onAnalysisSuccess: (result: AnalysisResult) => void;
+  onAnalysisFail: () => void;
+}) {
   const followingInputRef = useRef<HTMLInputElement | null>(null);
   const followersInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -138,7 +163,8 @@ function UploadCard({ onStartAnalyze }: { onStartAnalyze: () => void }) {
 
       if (type === "following") {
         const hasFollowingStructure =
-          lowerText.includes("following") ||
+          lowerText.includes("window.ytd.following") ||
+          lowerText.includes('"following"') ||
           lowerText.includes("followingaccountid");
 
         if (!hasFollowingStructure) {
@@ -149,8 +175,8 @@ function UploadCard({ onStartAnalyze }: { onStartAnalyze: () => void }) {
 
       if (type === "followers") {
         const hasFollowerStructure =
-          lowerText.includes("follower") ||
-          lowerText.includes("followers") ||
+          lowerText.includes("window.ytd.follower") ||
+          lowerText.includes('"follower"') ||
           lowerText.includes("followeraccountid");
 
         if (!hasFollowerStructure) {
@@ -230,7 +256,7 @@ function UploadCard({ onStartAnalyze }: { onStartAnalyze: () => void }) {
     e.target.value = "";
   };
 
-  const handleStartAnalyze = () => {
+  const handleStartAnalyze = async () => {
     clearError();
 
     if (!followingFile || !followersFile) {
@@ -238,7 +264,40 @@ function UploadCard({ onStartAnalyze }: { onStartAnalyze: () => void }) {
       return;
     }
 
-    onStartAnalyze();
+    setIsValidating(true);
+    onAnalysisStart();
+
+    try {
+      const formData = new FormData();
+
+      formData.append("followersFile", followersFile);
+      formData.append("followingFile", followingFile);
+
+      const response = await fetch("/api/analysis/upload", {
+        method: "POST",
+        body: formData,
+      });
+
+      const data: AnalysisResult = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.message || "파일 업로드에 실패했습니다.");
+      }
+
+      console.log("업로드 API 응답:", data);
+
+      onAnalysisSuccess(data);
+    } catch (error) {
+      onAnalysisFail();
+
+      if (error instanceof Error) {
+        showError(error.message);
+      } else {
+        showError("파일 업로드 중 오류가 발생했습니다.");
+      }
+    } finally {
+      setIsValidating(false);
+    }
   };
 
   return (
@@ -287,7 +346,7 @@ function UploadCard({ onStartAnalyze }: { onStartAnalyze: () => void }) {
             disabled={!followingFile || !followersFile || isValidating}
             className="mt-2 rounded-2xl bg-blue-600 px-7 py-3 text-sm font-black text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
           >
-            {isValidating ? "파일 확인 중" : "분석 시작"}
+            {isValidating ? "분석 요청 중" : "분석 시작"}
           </button>
         </div>
 
