@@ -335,6 +335,8 @@ export default function DashboardPage({
           selectedPeriod={selectedPeriod}
           yearDistribution={yearDistribution}
           selectedSummary={selectedSummary}
+          selectedNonMutualAccounts={selectedNonMutualAccounts}
+          selectedMutualAccounts={selectedMutualAccounts}
           onClose={() => setSelectedPeriodKey(null)}
         />
       )}
@@ -346,18 +348,51 @@ function PeriodDetailModal({
   selectedPeriod,
   yearDistribution,
   selectedSummary,
+  selectedNonMutualAccounts,
+  selectedMutualAccounts,
   onClose,
 }: {
   selectedPeriod: PeriodDistributionItem;
   yearDistribution: YearDistributionItem[];
   selectedSummary: ReturnType<typeof createSelectedPeriodSummary>;
+  selectedNonMutualAccounts: AccountItem[];
+  selectedMutualAccounts: AccountItem[];
   onClose: () => void;
 }) {
   const [showAllMonths, setShowAllMonths] = useState(false);
+  const [selectedYear, setSelectedYear] = useState<string | null>(null);
 
   const visibleYearDistribution = showAllMonths
     ? yearDistribution
     : yearDistribution.slice(0, 8);
+
+  const selectedMonthAccounts = useMemo(() => {
+    if (!selectedYear) return [];
+
+    return [
+      ...selectedNonMutualAccounts.map((account) => ({
+        account,
+        relationLabel: "비맞팔",
+        relationClassName: "bg-red-50 text-red-600",
+      })),
+      ...selectedMutualAccounts.map((account) => ({
+        account,
+        relationLabel: "맞팔",
+        relationClassName: "bg-blue-50 text-blue-600",
+      })),
+    ]
+      .filter(
+        (item) => getAccountCreatedPeriodLabel(item.account) === selectedYear,
+      )
+      .sort((a, b) => {
+        const aTime =
+          parseAccountCreatedDate(a.account.accountCreatedDate)?.getTime() ?? 0;
+        const bTime =
+          parseAccountCreatedDate(b.account.accountCreatedDate)?.getTime() ?? 0;
+
+        return aTime - bTime;
+      });
+  }, [selectedYear, selectedNonMutualAccounts, selectedMutualAccounts]);
 
   const maxYearCount = Math.max(
     ...yearDistribution.map((item) => item.totalCount),
@@ -366,7 +401,7 @@ function PeriodDetailModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4">
-      <div className="flex max-h-[80vh] w-full max-w-[750px] flex-col rounded-2xl border border-slate-200 bg-white shadow-2xl">
+      <div className="flex max-h-[95vh] w-full max-w-[750px] flex-col rounded-2xl border border-slate-200 bg-white shadow-2xl">
         <div className="shrink-0 flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
           <div>
             <h2 className="text-lg font-black tracking-[-0.03em]">
@@ -448,10 +483,22 @@ function PeriodDetailModal({
                         ? (item.mutualCount / item.totalCount) * 100
                         : 0;
 
+                    const isSelected = selectedYear === item.year;
+
                     return (
-                      <div
+                      <button
                         key={item.year}
-                        className="grid grid-cols-[64px_1fr_86px] items-center gap-3"
+                        type="button"
+                        onClick={() =>
+                          setSelectedYear((prev) =>
+                            prev === item.year ? null : item.year,
+                          )
+                        }
+                        className={`grid w-full grid-cols-[64px_1fr_86px] items-center gap-3 rounded-lg px-1 py-1 text-left transition ${
+                          isSelected
+                            ? "bg-slate-100 ring-1 ring-slate-200"
+                            : "hover:bg-slate-50"
+                        }`}
                       >
                         <p className="text-xs font-black text-slate-600">
                           {item.year}
@@ -484,9 +531,83 @@ function PeriodDetailModal({
                         <p className="text-right text-xs font-black text-slate-700">
                           {formatCount(item.totalCount)}명
                         </p>
-                      </div>
+                      </button>
                     );
                   })}
+
+                  {selectedYear && (
+                    <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                      <div className="mb-2 flex items-center justify-between">
+                        <p className="text-sm font-black text-slate-800">
+                          {selectedYear} 계정{" "}
+                          {selectedMonthAccounts.length.toLocaleString()}개
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedYear(null)}
+                          className="text-xs font-black text-slate-400 transition hover:text-slate-700"
+                        >
+                          닫기
+                        </button>
+                      </div>
+
+                      {selectedMonthAccounts.length > 0 ? (
+                        <div className="max-h-[220px] space-y-2 overflow-y-auto pr-1">
+                          {selectedMonthAccounts.map((item, index) => {
+                            const profileUrl = createXProfileUrl(item.account);
+                            const createdLabel = createAccountRowCreatedLabel(
+                              item.account,
+                            );
+
+                            return (
+                              <div
+                                key={`${item.account.accountId ?? "account"}-${index}`}
+                                className="flex items-center justify-between gap-3 rounded-lg border border-slate-100 bg-white px-3 py-2"
+                              >
+                                <div className="min-w-0">
+                                  <p className="truncate text-xs font-black text-slate-700">
+                                    {createdLabel}
+                                  </p>
+                                </div>
+
+                                <div className="flex shrink-0 items-center gap-2">
+                                  <span
+                                    className={`rounded-full px-2 py-1 text-[11px] font-black ${item.relationClassName}`}
+                                  >
+                                    {item.relationLabel}
+                                  </span>
+
+                                  {profileUrl ? (
+                                    <a
+                                      href={profileUrl}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-black text-white transition hover:bg-slate-700"
+                                      onClick={(event) =>
+                                        event.stopPropagation()
+                                      }
+                                    >
+                                      X에서 확인
+                                    </a>
+                                  ) : (
+                                    <span className="rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-black text-slate-400">
+                                      링크 없음
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="rounded-lg border border-slate-100 bg-white px-4 py-6 text-center">
+                          <p className="text-xs font-black text-slate-500">
+                            선택한 월에 표시할 계정이 없습니다.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {yearDistribution.length > 8 && (
                     <button
@@ -847,6 +968,40 @@ function getAverageAgeMonths(accounts: AccountItem[]) {
   const totalMonths = ageMonthsList.reduce((sum, months) => sum + months, 0);
 
   return Math.round(totalMonths / ageMonthsList.length);
+}
+
+function createAccountRowCreatedLabel(account: AccountItem) {
+  if (account.isLegacyAccount === "true") {
+    return "2010년 이전 계정";
+  }
+
+  const date = parseAccountCreatedDate(account.accountCreatedDate);
+
+  if (!date || date.getFullYear() <= 2010) {
+    return "2010년 이전 계정";
+  }
+
+  return `가입일 ${formatDateLabel(date)}`;
+}
+
+function formatDateLabel(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}.${month}.${day}`;
+}
+
+function createXProfileUrl(account: AccountItem) {
+  if (account.userLink) {
+    return account.userLink;
+  }
+
+  if (!account.accountId) {
+    return null;
+  }
+
+  return `https://x.com/i/user/${account.accountId}`;
 }
 
 function getAccountCreatedPeriodLabel(account: AccountItem) {
