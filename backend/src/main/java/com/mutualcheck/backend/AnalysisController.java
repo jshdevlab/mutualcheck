@@ -76,6 +76,7 @@ public class AnalysisController {
         result.put("mutualRate", mutualRate);
         result.put("mutualAccounts", mutualAccounts);
         result.put("nonMutualAccounts", nonMutualAccounts);
+        result.put("ageGroups", buildAgeGroups(mutualAccounts, nonMutualAccounts));
 
         return result;
     }
@@ -144,6 +145,155 @@ public class AnalysisController {
         }
 
         return accounts;
+    }
+
+    private List<Map<String, Object>> buildAgeGroups(
+            List<Map<String, String>> mutualAccounts,
+            List<Map<String, String>> nonMutualAccounts
+    ) {
+        List<Map<String, String>> allAccounts = new ArrayList<Map<String, String>>();
+
+        for (Map<String, String> account : mutualAccounts) {
+            Map<String, String> copiedAccount = new LinkedHashMap<String, String>(account);
+            copiedAccount.put("relation", "mutual");
+            allAccounts.add(copiedAccount);
+        }
+
+        for (Map<String, String> account : nonMutualAccounts) {
+            Map<String, String> copiedAccount = new LinkedHashMap<String, String>(account);
+            copiedAccount.put("relation", "nonMutual");
+            allAccounts.add(copiedAccount);
+        }
+
+        List<String> groupOrder = List.of(
+                "1년 미만",
+                "1년 이상",
+                "3년 이상",
+                "5년 이상",
+                "7년 이상"
+        );
+
+        Map<String, List<Map<String, String>>> groupedAccounts = new LinkedHashMap<String, List<Map<String, String>>>();
+
+        for (String groupLabel : groupOrder) {
+            groupedAccounts.put(groupLabel, new ArrayList<Map<String, String>>());
+        }
+
+        for (Map<String, String> account : allAccounts) {
+            String ageGroup = account.get("accountAgeGroup");
+
+            if (ageGroup == null || ageGroup.isBlank()) {
+                ageGroup = "7년 이상";
+            }
+
+            if (!groupedAccounts.containsKey(ageGroup)) {
+                groupedAccounts.put(ageGroup, new ArrayList<Map<String, String>>());
+            }
+
+            groupedAccounts.get(ageGroup).add(account);
+        }
+
+        List<Map<String, Object>> ageGroups = new ArrayList<Map<String, Object>>();
+
+        for (String groupLabel : groupOrder) {
+            List<Map<String, String>> accounts = groupedAccounts.get(groupLabel);
+
+            int mutualCount = 0;
+            int nonMutualCount = 0;
+
+            for (Map<String, String> account : accounts) {
+                if ("mutual".equals(account.get("relation"))) {
+                    mutualCount++;
+                }
+
+                if ("nonMutual".equals(account.get("relation"))) {
+                    nonMutualCount++;
+                }
+            }
+
+            Map<String, Object> group = new LinkedHashMap<String, Object>();
+            group.put("label", groupLabel);
+            group.put("totalCount", accounts.size());
+            group.put("mutualCount", mutualCount);
+            group.put("nonMutualCount", nonMutualCount);
+            group.put("monthlyStats", buildMonthlyStats(accounts));
+
+            ageGroups.add(group);
+        }
+
+        return ageGroups;
+    }
+
+    private List<Map<String, Object>> buildMonthlyStats(List<Map<String, String>> accounts) {
+        Map<String, List<Map<String, String>>> monthlyMap = new LinkedHashMap<String, List<Map<String, String>>>();
+
+        for (Map<String, String> account : accounts) {
+            String monthKey = extractMonthKey(account.get("accountCreatedDate"));
+
+            if (!monthlyMap.containsKey(monthKey)) {
+                monthlyMap.put(monthKey, new ArrayList<Map<String, String>>());
+            }
+
+            monthlyMap.get(monthKey).add(account);
+        }
+
+        List<Map<String, Object>> monthlyStats = new ArrayList<Map<String, Object>>();
+
+        for (Map.Entry<String, List<Map<String, String>>> entry : monthlyMap.entrySet()) {
+            String month = entry.getKey();
+            List<Map<String, String>> monthAccounts = entry.getValue();
+
+            int mutualCount = 0;
+            int nonMutualCount = 0;
+
+            List<Map<String, String>> visibleAccounts = new ArrayList<Map<String, String>>();
+
+            for (Map<String, String> account : monthAccounts) {
+                if ("mutual".equals(account.get("relation"))) {
+                    mutualCount++;
+                }
+
+                if ("nonMutual".equals(account.get("relation"))) {
+                    nonMutualCount++;
+                }
+
+                Map<String, String> visibleAccount = new LinkedHashMap<String, String>();
+                visibleAccount.put("accountCreatedDate", account.get("accountCreatedDate"));
+                visibleAccount.put("accountAge", account.get("accountAge"));
+                visibleAccount.put("relation", account.get("relation"));
+                visibleAccount.put("userLink", account.get("userLink"));
+                visibleAccount.put("isLegacyAccount", account.get("isLegacyAccount"));
+
+                visibleAccounts.add(visibleAccount);
+            }
+
+            Map<String, Object> monthlyStat = new LinkedHashMap<String, Object>();
+            monthlyStat.put("month", month);
+            monthlyStat.put("totalCount", monthAccounts.size());
+            monthlyStat.put("mutualCount", mutualCount);
+            monthlyStat.put("nonMutualCount", nonMutualCount);
+            monthlyStat.put("accounts", visibleAccounts);
+
+            monthlyStats.add(monthlyStat);
+        }
+
+        return monthlyStats;
+    }
+
+    private String extractMonthKey(String accountCreatedDate) {
+        if (accountCreatedDate == null || accountCreatedDate.isBlank()) {
+            return "2010년 이전";
+        }
+
+        if (accountCreatedDate.contains("2010년 이전")) {
+            return "2010년 이전";
+        }
+
+        if (accountCreatedDate.length() >= 7) {
+            return accountCreatedDate.substring(0, 7);
+        }
+
+        return "2010년 이전";
     }
 
     private Set<String> extractIds(List<Map<String, String>> accounts) {

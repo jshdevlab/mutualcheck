@@ -1,17 +1,40 @@
 import { useMemo, useState } from "react";
 import type { AnalysisResult, NonMutualAccount } from "../App";
 
-type AccountItem = NonMutualAccount & {
+type RelationType = "mutual" | "nonMutual";
+
+type AnalysisAccount = {
   accountId?: string;
+  userLink?: string;
   accountCreatedDate?: string;
   accountAge?: string;
   accountAgeGroup?: string;
-  isLegacyAccount?: string;
-  userLink?: string;
+  isLegacyAccount?: string | boolean;
+  relation?: RelationType;
 };
+
+type MonthlyStat = {
+  month: string;
+  totalCount: number;
+  mutualCount: number;
+  nonMutualCount: number;
+  accounts: AnalysisAccount[];
+};
+
+type AgeGroup = {
+  label: string;
+  totalCount: number;
+  mutualCount: number;
+  nonMutualCount: number;
+  monthlyStats: MonthlyStat[];
+};
+
+type AccountItem = NonMutualAccount & AnalysisAccount;
 
 type DashboardAnalysisResult = AnalysisResult & {
   mutualAccounts?: AccountItem[];
+  nonMutualAccounts?: AccountItem[];
+  ageGroups?: AgeGroup[];
 };
 
 type PeriodKey =
@@ -737,7 +760,7 @@ function filterAccountsByPeriod<T extends AccountItem>(
   bucket: PeriodBucket,
 ): T[] {
   return accounts.filter((account) => {
-    if (account.isLegacyAccount === "true") {
+    if (isLegacyAccount(account)) {
       return bucket.key === "overSevenYears";
     }
 
@@ -970,8 +993,12 @@ function getAverageAgeMonths(accounts: AccountItem[]) {
   return Math.round(totalMonths / ageMonthsList.length);
 }
 
+function isLegacyAccount(account: AccountItem) {
+  return account.isLegacyAccount === true || account.isLegacyAccount === "true";
+}
+
 function createAccountRowCreatedLabel(account: AccountItem) {
-  if (account.isLegacyAccount === "true") {
+  if (isLegacyAccount(account)) {
     return "2010년 이전 계정";
   }
 
@@ -993,19 +1020,19 @@ function formatDateLabel(date: Date) {
 }
 
 function createXProfileUrl(account: AccountItem) {
+  if (account.accountId) {
+    return `https://x.com/i/user/${account.accountId}`;
+  }
+
   if (account.userLink) {
     return account.userLink;
   }
 
-  if (!account.accountId) {
-    return null;
-  }
-
-  return `https://x.com/i/user/${account.accountId}`;
+  return null;
 }
 
 function getAccountCreatedPeriodLabel(account: AccountItem) {
-  if (account.isLegacyAccount === "true") {
+  if (isLegacyAccount(account)) {
     return "2010년 이전";
   }
 
