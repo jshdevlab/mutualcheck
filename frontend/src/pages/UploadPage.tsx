@@ -320,17 +320,6 @@ function UploadCard({
         <div className="mt-7 grid w-full max-w-[320px] grid-cols-1 gap-3">
           <button
             type="button"
-            onClick={() => followingInputRef.current?.click()}
-            disabled={isValidating}
-            className="rounded-2xl border border-blue-200 bg-white px-5 py-3 text-sm font-black text-blue-700 shadow-sm transition hover:border-blue-400 hover:bg-blue-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
-          >
-            {followingFile
-              ? `${followingFile.name} 준비 완료`
-              : "following.js 선택"}
-          </button>
-
-          <button
-            type="button"
             onClick={() => followersInputRef.current?.click()}
             disabled={isValidating}
             className="rounded-2xl border border-blue-200 bg-white px-5 py-3 text-sm font-black text-blue-700 shadow-sm transition hover:border-blue-400 hover:bg-blue-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
@@ -338,6 +327,17 @@ function UploadCard({
             {followersFile
               ? `${followersFile.name} 준비 완료`
               : "followers.js 선택"}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => followingInputRef.current?.click()}
+            disabled={isValidating}
+            className="rounded-2xl border border-blue-200 bg-white px-5 py-3 text-sm font-black text-blue-700 shadow-sm transition hover:border-blue-400 hover:bg-blue-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+          >
+            {followingFile
+              ? `${followingFile.name} 준비 완료`
+              : "following.js 선택"}
           </button>
 
           <button

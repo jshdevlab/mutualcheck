@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { AnalysisResult, NonMutualAccount } from "../App";
 
 type RelationType = "mutual" | "nonMutual";
@@ -65,6 +65,12 @@ type YearDistributionItem = {
   nonMutualCount: number;
   mutualCount: number;
   totalCount: number;
+};
+
+type MainAiReport = {
+  insights: string[];
+  evaluation: string;
+  tip: string;
 };
 
 const PERIOD_BUCKETS: PeriodBucket[] = [
@@ -141,7 +147,94 @@ export default function DashboardPage({
   );
 
   const mutualRateText = `${analysisResult.mutualRate}%`;
-  const aiReport = createMainAiReport(periodDistribution, analysisResult);
+  const fallbackAiReport = useMemo(() => {
+    return createMainAiReport(periodDistribution, analysisResult);
+  }, [periodDistribution, analysisResult]);
+
+  const [generatedAiReport, setGeneratedAiReport] =
+    useState<MainAiReport | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState("");
+
+  const aiReport = generatedAiReport ?? fallbackAiReport;
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function fetchAiReport() {
+      setAiLoading(true);
+      setAiError("");
+      setGeneratedAiReport(null);
+
+      try {
+        const response = await fetch("http://localhost:8080/api/ai-report", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            followersCount: analysisResult.followersCount,
+            followingCount: analysisResult.followingCount,
+            mutualCount: analysisResult.mutualCount,
+            nonMutualCount: analysisResult.nonMutualCount,
+            mutualRate: analysisResult.mutualRate,
+            ageGroups: periodDistribution.map((group) => {
+              const groupNonMutualRate =
+                group.totalCount === 0
+                  ? 0
+                  : Number(
+                      ((group.nonMutualCount / group.totalCount) * 100).toFixed(
+                        1,
+                      ),
+                    );
+
+              return {
+                label: group.label,
+                totalCount: group.totalCount,
+                mutualCount: group.mutualCount,
+                nonMutualCount: group.nonMutualCount,
+                nonMutualRate: groupNonMutualRate,
+                nonMutualRateText: `${groupNonMutualRate}%`,
+              };
+            }),
+          }),
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          throw new Error("AI 리포트 생성 실패");
+        }
+
+        const data: { report?: string } = await response.json();
+        const parsedReport = parseAiReportText(data.report ?? "");
+
+        setGeneratedAiReport(parsedReport);
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return;
+        }
+
+        setAiError("AI 호출 실패로 기본 분석을 표시합니다.");
+      } finally {
+        if (!controller.signal.aborted) {
+          setAiLoading(false);
+        }
+      }
+    }
+
+    fetchAiReport();
+
+    return () => {
+      controller.abort();
+    };
+  }, [
+    analysisResult.followersCount,
+    analysisResult.followingCount,
+    analysisResult.mutualCount,
+    analysisResult.nonMutualCount,
+    analysisResult.mutualRate,
+    periodDistribution,
+  ]);
 
   return (
     <div className="min-h-screen bg-[#F6F8FB] text-slate-950">
@@ -160,7 +253,7 @@ export default function DashboardPage({
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-[1000px] space-y-3 p-3">
+      <main className="mx-auto w-full max-w-[1000px] space-y-2 p-2">
         <section className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-6">
           <div className="min-h-[132px] rounded-xl border border-slate-200 bg-white p-4 shadow-sm xl:col-span-2">
             <p className="ml-4 text-xs font-bold text-slate-700">
@@ -225,7 +318,7 @@ export default function DashboardPage({
           />
         </section>
 
-        <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <section className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
           <div className="flex items-start gap-2">
             <span className="text-lg">✨</span>
             <div>
@@ -233,13 +326,15 @@ export default function DashboardPage({
                 AI 관계 분석 리포트
               </h2>
               <p className="mt-0.5 text-xs font-medium text-slate-500">
-                전체 관계 데이터를 기준으로 분석했습니다.
+                {aiLoading
+                  ? "AI 리포트를 생성 중입니다."
+                  : aiError || "전체 관계 데이터를 기준으로 분석했습니다."}
               </p>
             </div>
           </div>
 
           <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
-            <div className="rounded-xl border border-blue-100 bg-white p-4">
+            <div className="rounded-xl border border-blue-100 bg-white p-3">
               <h3 className="text-sm font-black">핵심 인사이트</h3>
 
               <ul className="mt-3 space-y-2 text-xs font-semibold leading-5 text-slate-700">
@@ -296,7 +391,7 @@ export default function DashboardPage({
             </div>
           </div>
 
-          <div className="mt-4 h-[285px]">
+          <div className="mt-3 h-[285px]">
             <div className="relative flex h-full items-end gap-3 border-b border-slate-300 px-2">
               <div className="pointer-events-none absolute inset-x-0 top-0 border-t border-dashed border-slate-200" />
               <div className="pointer-events-none absolute inset-x-0 top-1/4 border-t border-dashed border-slate-200" />
@@ -885,10 +980,58 @@ function createSelectedPeriodSummary(
   };
 }
 
+function parseAiReportText(reportText: string): MainAiReport {
+  const normalizedText = reportText.trim();
+
+  if (!normalizedText) {
+    return {
+      insights: ["AI 리포트 내용이 비어 있습니다."],
+      evaluation: "기본 분석 결과를 기준으로 관계 상태를 확인해 주세요.",
+      tip: "계정 분포 차트에서 비맞팔 비율이 높은 구간부터 점검하는 것이 좋습니다.",
+    };
+  }
+
+  const insightMatch = normalizedText.match(
+    /1\.\s*핵심\s*인사이트\s*:?([\s\S]*?)(?=\s*2\.\s*종합\s*평가\s*:|$)/,
+  );
+
+  const evaluationMatch = normalizedText.match(
+    /2\.\s*종합\s*평가\s*:?([\s\S]*?)(?=\s*3\.\s*관리\s*팁\s*:|$)/,
+  );
+
+  const tipMatch = normalizedText.match(/3\.\s*관리\s*팁\s*:?([\s\S]*)$/);
+
+  const insightText = cleanupAiSection(insightMatch?.[1] ?? "");
+  const evaluation = cleanupAiSection(evaluationMatch?.[1] ?? normalizedText);
+  const tip = cleanupAiSection(tipMatch?.[1] ?? "");
+
+  const insights = insightText
+    .split(/\n+/)
+    .map((line) => line.replace(/^[-•*]\s*/, "").trim())
+    .filter(Boolean);
+
+  return {
+    insights: insights.length > 0 ? insights : [evaluation],
+    evaluation,
+    tip:
+      tip ||
+      "비맞팔 수만 기준으로 판단하지 말고, 계정 생성 구간별 분포를 함께 확인하세요.",
+  };
+}
+
+function cleanupAiSection(value: string) {
+  return value
+    .replace(/^#{1,6}\s*/gm, "")
+    .replace(/\*\*/g, "")
+    .replace(/```/g, "")
+    .replace(/^[-•*]\s*$/gm, "")
+    .trim();
+}
+
 function createMainAiReport(
   periodDistribution: PeriodDistributionItem[],
   analysisResult: AnalysisResult,
-) {
+): MainAiReport {
   const largestNonMutualBucket =
     periodDistribution.reduce<PeriodDistributionItem | null>(
       (maxItem, item) => {
