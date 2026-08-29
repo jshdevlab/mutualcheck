@@ -1,28 +1,11 @@
-import { useEffect, useState } from "react";
-
 function AnalyzeModal({
+  step,
   onCancel,
-  onComplete,
 }: {
+  step: number;
   onCancel: () => void;
-  onComplete: () => void;
 }) {
-  const [step, setStep] = useState(0);
-
-  useEffect(() => {
-    const timers = [
-      setTimeout(() => setStep(1), 700),
-      setTimeout(() => setStep(2), 1400),
-      setTimeout(() => setStep(3), 2100),
-      setTimeout(() => setStep(4), 2800),
-      setTimeout(() => setStep(5), 3500),
-      setTimeout(() => onComplete(), 4000),
-    ];
-
-    return () => {
-      timers.forEach(clearTimeout);
-    };
-  }, [onComplete]);
+  const isComplete = step >= 5;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 px-5 backdrop-blur-sm">
@@ -37,55 +20,55 @@ function AnalyzeModal({
         </button>
 
         <div className="relative mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-violet-100">
-          {step < 5 && (
-            <div className="absolute inset-0 rounded-full border-4 border-violet-200 border-t-violet-500 animate-spin" />
+          {!isComplete && (
+            <div className="absolute inset-0 animate-spin rounded-full border-4 border-violet-200 border-t-violet-500" />
           )}
 
-          <span className="relative text-4xl">{step >= 5 ? "✅" : "🔍"}</span>
+          <span className="relative text-4xl">{isComplete ? "✅" : "🔍"}</span>
         </div>
 
         <h2 className="mt-6 text-center text-[25px] font-extrabold leading-[1.25] tracking-[-0.02em] text-slate-950">
-          {step >= 5 ? "분석이 완료되었습니다" : "데이터를 분석하는 중입니다"}
+          {isComplete ? "분석이 완료되었습니다" : "데이터를 분석하는 중입니다"}
         </h2>
 
         <p className="mt-2 text-center text-sm text-slate-500">
-          {step >= 5 ? "결과 화면으로 이동합니다." : "잠시만 기다려 주세요."}
+          {isComplete ? "결과 화면으로 이동합니다." : "잠시만 기다려 주세요."}
         </p>
 
         <div className="mt-8 space-y-5">
           <AnalyzeStep
             active={step > 0}
             current={step === 0}
-            title="관계 파일 업로드 완료"
+            title="관계 파일 확인 완료"
             desc="following.js와 followers.js 파일을 확인했습니다."
           />
 
           <AnalyzeStep
             active={step > 1}
             current={step === 1}
-            title="데이터 구조 확인 중"
-            desc="X 데이터 보관 파일의 관계 데이터를 확인하고 있습니다."
+            title="관계 데이터 분석 중"
+            desc="팔로잉과 팔로워 데이터를 서버에서 분석하고 있습니다."
           />
 
           <AnalyzeStep
             active={step > 2}
             current={step === 2}
-            title="팔로잉/팔로워 목록 분석 중"
-            desc="accountId 기준으로 팔로잉과 팔로워 목록을 정리하고 있습니다."
+            title="맞팔 관계 계산 완료"
+            desc="맞팔 계정과 비맞팔 계정 계산이 완료되었습니다."
           />
 
           <AnalyzeStep
             active={step > 3}
             current={step === 3}
-            title="맞팔 관계 계산 중"
-            desc="맞팔 계정과 비맞팔 계정을 계산하고 있습니다."
+            title="AI 관계 리포트 생성 중"
+            desc="계정 생성 구간별 분포를 기준으로 AI 분석 문장을 생성하고 있습니다."
           />
 
           <AnalyzeStep
             active={step > 4}
             current={step === 4}
             title="대시보드 생성 중"
-            desc="맞팔률과 분석 결과를 화면에 표시할 수 있도록 정리하고 있습니다."
+            desc="맞팔률과 AI 리포트를 화면에 표시할 수 있도록 정리하고 있습니다."
           />
         </div>
       </section>

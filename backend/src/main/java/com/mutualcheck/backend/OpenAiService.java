@@ -1,3 +1,4 @@
+// API 연결 설정
 package com.mutualcheck.backend;
 
 import java.util.List;

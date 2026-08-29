@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import type { AnalysisResult, NonMutualAccount } from "../App";
 
 type RelationType = "mutual" | "nonMutual";
@@ -151,95 +151,24 @@ export default function DashboardPage({
     return createMainAiReport(periodDistribution, analysisResult);
   }, [periodDistribution, analysisResult]);
 
-  const [generatedAiReport, setGeneratedAiReport] =
-    useState<MainAiReport | null>(null);
-  const [aiLoading, setAiLoading] = useState(false);
-  const [aiError, setAiError] = useState("");
+  const savedAiReportText = (
+    analysisResult as AnalysisResult & {
+      aiReport?: string;
+    }
+  ).aiReport;
 
-  const aiReport = generatedAiReport ?? fallbackAiReport;
-
-  useEffect(() => {
-    const controller = new AbortController();
-
-    async function fetchAiReport() {
-      setAiLoading(true);
-      setAiError("");
-      setGeneratedAiReport(null);
-
-      try {
-        const response = await fetch("http://localhost:8080/api/ai-report", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            followersCount: analysisResult.followersCount,
-            followingCount: analysisResult.followingCount,
-            mutualCount: analysisResult.mutualCount,
-            nonMutualCount: analysisResult.nonMutualCount,
-            mutualRate: analysisResult.mutualRate,
-            ageGroups: periodDistribution.map((group) => {
-              const groupNonMutualRate =
-                group.totalCount === 0
-                  ? 0
-                  : Number(
-                      ((group.nonMutualCount / group.totalCount) * 100).toFixed(
-                        1,
-                      ),
-                    );
-
-              return {
-                label: group.label,
-                totalCount: group.totalCount,
-                mutualCount: group.mutualCount,
-                nonMutualCount: group.nonMutualCount,
-                nonMutualRate: groupNonMutualRate,
-                nonMutualRateText: `${groupNonMutualRate}%`,
-              };
-            }),
-          }),
-          signal: controller.signal,
-        });
-
-        if (!response.ok) {
-          throw new Error("AI 리포트 생성 실패");
-        }
-
-        const data: { report?: string } = await response.json();
-        const parsedReport = parseAiReportText(data.report ?? "");
-
-        setGeneratedAiReport(parsedReport);
-      } catch (error) {
-        if (error instanceof DOMException && error.name === "AbortError") {
-          return;
-        }
-
-        setAiError("AI 호출 실패로 기본 분석을 표시합니다.");
-      } finally {
-        if (!controller.signal.aborted) {
-          setAiLoading(false);
-        }
-      }
+  const aiReport = useMemo(() => {
+    if (!savedAiReportText) {
+      return fallbackAiReport;
     }
 
-    fetchAiReport();
-
-    return () => {
-      controller.abort();
-    };
-  }, [
-    analysisResult.followersCount,
-    analysisResult.followingCount,
-    analysisResult.mutualCount,
-    analysisResult.nonMutualCount,
-    analysisResult.mutualRate,
-    periodDistribution,
-  ]);
+    return parseAiReportText(savedAiReportText);
+  }, [savedAiReportText, fallbackAiReport]);
 
   return (
     <div className="min-h-screen bg-[#F6F8FB] text-slate-950">
       <header className="border-b border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-[1000px] items-center justify-between px-4 py-2">
+        <div className="mx-auto flex max-w-[1000px] items-center justify-between px-4 py-1">
           <div className="flex items-center gap-2">
             <img
               src="/main_1.png"
@@ -255,7 +184,7 @@ export default function DashboardPage({
 
       <main className="mx-auto w-full max-w-[1000px] space-y-2 p-2">
         <section className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-6">
-          <div className="min-h-[132px] rounded-xl border border-slate-200 bg-white p-4 shadow-sm xl:col-span-2">
+          <div className="min-h-[118px] rounded-xl border border-slate-200 bg-white p-5 shadow-sm xl:col-span-2">
             <p className="ml-4 text-xs font-bold text-slate-700">
               맞팔률{" "}
               <span className="font-semibold text-slate-500">
@@ -263,19 +192,19 @@ export default function DashboardPage({
               </span>
             </p>
 
-            <div className="mt-4 flex items-center justify-between">
+            <div className="mt-3 flex items-center justify-between">
               <div className="ml-3">
                 <h2 className="text-4xl font-black tracking-[-0.06em] text-blue-600">
                   {mutualRateText}
                 </h2>
 
-                <p className="mt-3 text-xs font-black text-slate-500">
+                <p className="mt-4 text-xs font-black text-slate-500">
                   총 팔로잉 기준 맞팔 비율
                 </p>
               </div>
 
               <div
-                className="relative mr-2 h-25 w-25 shrink-0 rounded-full"
+                className="relative mr-2 h-20 w-20 shrink-0 rounded-full"
                 style={{
                   background: `conic-gradient(#2563eb 0 ${analysisResult.mutualRate}%, #e8eef7 ${analysisResult.mutualRate}% 100%)`,
                 }}
@@ -326,9 +255,9 @@ export default function DashboardPage({
                 AI 관계 분석 리포트
               </h2>
               <p className="mt-0.5 text-xs font-medium text-slate-500">
-                {aiLoading
-                  ? "AI 리포트를 생성 중입니다."
-                  : aiError || "전체 관계 데이터를 기준으로 분석했습니다."}
+                {savedAiReportText
+                  ? "업로드 분석 과정에서 생성된 AI 리포트입니다."
+                  : "AI 호출 실패로 기본 분석을 표시합니다."}
               </p>
             </div>
           </div>
@@ -352,15 +281,14 @@ export default function DashboardPage({
               </p>
 
               <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-                <div className="flex items-start gap-2">
-                  <span className="text-base">💡</span>
-                  <div>
-                    <p className="text-sm font-black">관리 팁</p>
-                    <p className="mt-0.5 text-xs font-semibold text-slate-600">
-                      {aiReport.tip}
-                    </p>
-                  </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm">💡</span>
+                  <p className="text-sm font-black">관리 팁</p>
                 </div>
+
+                <p className="mt-2 text-xs font-semibold leading-5 text-slate-600">
+                  {aiReport.tip}
+                </p>
               </div>
             </div>
           </div>
@@ -369,11 +297,17 @@ export default function DashboardPage({
         <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-3">
                 <h2 className="text-base font-black tracking-[-0.03em]">
                   계정 분포
                 </h2>
+
+                <p className="text-[11px] font-semibold text-slate-500">
+                  ※ 막대를 클릭하면 선택한 구간의 상세 분석을 확인할 수
+                  있습니다.
+                </p>
               </div>
+
               <p className="mt-0.5 text-xs font-medium text-slate-500">
                 계정을 생성일 기준으로 나누고, 맞팔과 비맞팔을 함께 비교합니다.
               </p>
@@ -391,7 +325,7 @@ export default function DashboardPage({
             </div>
           </div>
 
-          <div className="mt-3 h-[285px]">
+          <div className="mt-3 h-[230px]">
             <div className="relative flex h-full items-end gap-3 border-b border-slate-300 px-2">
               <div className="pointer-events-none absolute inset-x-0 top-0 border-t border-dashed border-slate-200" />
               <div className="pointer-events-none absolute inset-x-0 top-1/4 border-t border-dashed border-slate-200" />
@@ -400,8 +334,8 @@ export default function DashboardPage({
 
               {periodDistribution.map((item) => {
                 const nonMutualHeight =
-                  (item.nonMutualCount / maxMainCount) * 180;
-                const mutualHeight = (item.mutualCount / maxMainCount) * 180;
+                  (item.nonMutualCount / maxMainCount) * 140;
+                const mutualHeight = (item.mutualCount / maxMainCount) * 140;
 
                 return (
                   <button
@@ -433,18 +367,14 @@ export default function DashboardPage({
             </div>
           </div>
 
-          <div className="mt-4 grid grid-cols-1 overflow-hidden rounded-lg border border-slate-100 text-center text-xs font-black md:grid-cols-2">
-            <div className="bg-red-50 px-4 py-3 text-red-600">
+          <div className="mt-3 grid grid-cols-1 overflow-hidden rounded-lg border border-slate-100 text-center text-xs font-black md:grid-cols-2">
+            <div className="bg-red-50 px-4 py-2 text-red-600">
               비맞팔 합계 {analysisResult.nonMutualCount.toLocaleString()}명
             </div>
-            <div className="bg-blue-50 px-4 py-3 text-blue-600">
+            <div className="bg-blue-50 px-4 py-2 text-blue-600">
               맞팔 합계 {analysisResult.mutualCount.toLocaleString()}명
             </div>
           </div>
-
-          <p className="mt-3 text-center text-[11px] font-semibold text-black">
-            ※ 막대를 클릭하면 선택한 구간의 상세 분석을 확인할 수 있습니다.
-          </p>
         </section>
       </main>
 
@@ -479,6 +409,7 @@ function PeriodDetailModal({
 }) {
   const [showAllMonths, setShowAllMonths] = useState(false);
   const [selectedYear, setSelectedYear] = useState<string | null>(null);
+  const [relationSort, setRelationSort] = useState<"asc" | "desc">("asc");
 
   const visibleYearDistribution = showAllMonths
     ? yearDistribution
@@ -492,25 +423,39 @@ function PeriodDetailModal({
         account,
         relationLabel: "비맞팔",
         relationClassName: "bg-red-50 text-red-600",
+        relationOrder: 0,
       })),
       ...selectedMutualAccounts.map((account) => ({
         account,
         relationLabel: "맞팔",
         relationClassName: "bg-blue-50 text-blue-600",
+        relationOrder: 1,
       })),
     ]
       .filter(
         (item) => getAccountCreatedPeriodLabel(item.account) === selectedYear,
       )
       .sort((a, b) => {
+        if (a.relationOrder !== b.relationOrder) {
+          return relationSort === "asc"
+            ? a.relationOrder - b.relationOrder
+            : b.relationOrder - a.relationOrder;
+        }
+
         const aTime =
           parseAccountCreatedDate(a.account.accountCreatedDate)?.getTime() ?? 0;
+
         const bTime =
           parseAccountCreatedDate(b.account.accountCreatedDate)?.getTime() ?? 0;
 
         return aTime - bTime;
       });
-  }, [selectedYear, selectedNonMutualAccounts, selectedMutualAccounts]);
+  }, [
+    selectedYear,
+    selectedNonMutualAccounts,
+    selectedMutualAccounts,
+    relationSort,
+  ]);
 
   const maxYearCount = Math.max(
     ...yearDistribution.map((item) => item.totalCount),
@@ -591,7 +536,12 @@ function PeriodDetailModal({
               {yearDistribution.length > 0 ? (
                 <>
                   {visibleYearDistribution.map((item) => {
-                    const totalWidth = (item.totalCount / maxYearCount) * 100;
+                    const totalWidth =
+                      item.totalCount > 0
+                        ? (Math.log1p(item.totalCount) /
+                            Math.log1p(maxYearCount)) *
+                          100
+                        : 0;
                     const nonMutualWidth =
                       item.totalCount > 0
                         ? (item.nonMutualCount / item.totalCount) * 100
@@ -604,128 +554,165 @@ function PeriodDetailModal({
                     const isSelected = selectedYear === item.year;
 
                     return (
-                      <button
-                        key={item.year}
-                        type="button"
-                        onClick={() =>
-                          setSelectedYear((prev) =>
-                            prev === item.year ? null : item.year,
-                          )
-                        }
-                        className={`grid w-full grid-cols-[64px_1fr_86px] items-center gap-3 rounded-lg px-1 py-1 text-left transition ${
-                          isSelected
-                            ? "bg-slate-100 ring-1 ring-slate-200"
-                            : "hover:bg-slate-50"
-                        }`}
-                      >
-                        <p className="text-xs font-black text-slate-600">
-                          {item.year}
-                        </p>
-
-                        <div className="h-5 rounded-full bg-slate-100">
-                          <div
-                            className="flex h-5 overflow-hidden rounded-full"
-                            style={{ width: `${Math.max(totalWidth, 4)}%` }}
-                          >
-                            <div
-                              className="flex h-full items-center justify-center bg-red-500 text-[10px] font-black text-white"
-                              style={{ width: `${nonMutualWidth}%` }}
-                            >
-                              {item.nonMutualCount > 0
-                                ? formatCount(item.nonMutualCount)
-                                : ""}
-                            </div>
-                            <div
-                              className="flex h-full items-center justify-center bg-blue-600 text-[10px] font-black text-white"
-                              style={{ width: `${mutualWidth}%` }}
-                            >
-                              {item.mutualCount > 0
-                                ? formatCount(item.mutualCount)
-                                : ""}
-                            </div>
-                          </div>
-                        </div>
-
-                        <p className="text-right text-xs font-black text-slate-700">
-                          {formatCount(item.totalCount)}명
-                        </p>
-                      </button>
-                    );
-                  })}
-
-                  {selectedYear && (
-                    <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
-                      <div className="mb-2 flex items-center justify-between">
-                        <p className="text-sm font-black text-slate-800">
-                          {selectedYear} 계정{" "}
-                          {selectedMonthAccounts.length.toLocaleString()}개
-                        </p>
+                      <div key={item.year}>
                         <button
                           type="button"
-                          onClick={() => setSelectedYear(null)}
-                          className="text-xs font-black text-slate-400 transition hover:text-slate-700"
+                          onClick={() =>
+                            setSelectedYear((prev) =>
+                              prev === item.year ? null : item.year,
+                            )
+                          }
+                          className={`grid w-full grid-cols-[64px_1fr_86px] items-center gap-3 rounded-lg px-1 py-1 text-left transition ${
+                            isSelected
+                              ? "bg-slate-100 ring-1 ring-slate-200"
+                              : "hover:bg-slate-50"
+                          }`}
                         >
-                          닫기
-                        </button>
-                      </div>
-
-                      {selectedMonthAccounts.length > 0 ? (
-                        <div className="max-h-[220px] space-y-2 overflow-y-auto pr-1">
-                          {selectedMonthAccounts.map((item, index) => {
-                            const profileUrl = createXProfileUrl(item.account);
-                            const createdLabel = createAccountRowCreatedLabel(
-                              item.account,
-                            );
-
-                            return (
-                              <div
-                                key={`${item.account.accountId ?? "account"}-${index}`}
-                                className="flex items-center justify-between gap-3 rounded-lg border border-slate-100 bg-white px-3 py-2"
-                              >
-                                <div className="min-w-0">
-                                  <p className="truncate text-xs font-black text-slate-700">
-                                    {createdLabel}
-                                  </p>
-                                </div>
-
-                                <div className="flex shrink-0 items-center gap-2">
-                                  <span
-                                    className={`rounded-full px-2 py-1 text-[11px] font-black ${item.relationClassName}`}
-                                  >
-                                    {item.relationLabel}
-                                  </span>
-
-                                  {profileUrl ? (
-                                    <a
-                                      href={profileUrl}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                      className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-black text-white transition hover:bg-slate-700"
-                                      onClick={(event) =>
-                                        event.stopPropagation()
-                                      }
-                                    >
-                                      X에서 확인
-                                    </a>
-                                  ) : (
-                                    <span className="rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-black text-slate-400">
-                                      링크 없음
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      ) : (
-                        <div className="rounded-lg border border-slate-100 bg-white px-4 py-6 text-center">
-                          <p className="text-xs font-black text-slate-500">
-                            선택한 월에 표시할 계정이 없습니다.
+                          <p className="text-xs font-black text-slate-600">
+                            {item.year}
                           </p>
-                        </div>
-                      )}
-                    </div>
-                  )}
+
+                          <div className="h-5 rounded-full bg-slate-100">
+                            <div
+                              className="flex h-5 overflow-hidden rounded-full"
+                              style={{ width: `${Math.max(totalWidth, 4)}%` }}
+                            >
+                              <div
+                                className="flex h-full items-center justify-center bg-red-500 text-[10px] font-black text-white"
+                                style={{ width: `${nonMutualWidth}%` }}
+                              >
+                                {item.nonMutualCount > 0
+                                  ? formatCount(item.nonMutualCount)
+                                  : ""}
+                              </div>
+
+                              <div
+                                className="flex h-full items-center justify-center bg-blue-600 text-[10px] font-black text-white"
+                                style={{ width: `${mutualWidth}%` }}
+                              >
+                                {item.mutualCount > 0
+                                  ? formatCount(item.mutualCount)
+                                  : ""}
+                              </div>
+                            </div>
+                          </div>
+
+                          <p className="text-right text-xs font-black text-slate-700">
+                            {formatCount(item.totalCount)}명
+                          </p>
+                        </button>
+
+                        {isSelected && (
+                          <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                            <div className="mb-2 flex items-center justify-between">
+                              <p className="text-sm font-black text-slate-800">
+                                {item.year} 계정{" "}
+                                {selectedMonthAccounts.length.toLocaleString()}
+                                개
+                              </p>
+
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setRelationSort("asc")}
+                                  className={`text-xs font-black transition ${
+                                    relationSort === "asc"
+                                      ? "text-slate-700"
+                                      : "text-slate-300 hover:text-slate-600"
+                                  }`}
+                                  title="비맞팔 먼저"
+                                >
+                                  ▲
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => setRelationSort("desc")}
+                                  className={`text-xs font-black transition ${
+                                    relationSort === "desc"
+                                      ? "text-slate-700"
+                                      : "text-slate-300 hover:text-slate-600"
+                                  }`}
+                                  title="맞팔 먼저"
+                                >
+                                  ▼
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedYear(null)}
+                                  className="text-xs font-black text-slate-400 transition hover:text-slate-700"
+                                >
+                                  닫기
+                                </button>
+                              </div>
+                            </div>
+
+                            {selectedMonthAccounts.length > 0 ? (
+                              <div className="max-h-[220px] space-y-2 overflow-y-auto pr-1">
+                                {selectedMonthAccounts.map(
+                                  (accountItem, index) => {
+                                    const profileUrl = createXProfileUrl(
+                                      accountItem.account,
+                                    );
+                                    const createdLabel =
+                                      createAccountRowCreatedLabel(
+                                        accountItem.account,
+                                      );
+
+                                    return (
+                                      <div
+                                        key={`${accountItem.account.accountId ?? "account"}-${index}`}
+                                        className="flex items-center justify-between gap-3 rounded-lg border border-slate-100 bg-white px-3 py-2"
+                                      >
+                                        <div className="min-w-0">
+                                          <p className="truncate text-xs font-black text-slate-700">
+                                            {createdLabel}
+                                          </p>
+                                        </div>
+
+                                        <div className="flex shrink-0 items-center gap-2">
+                                          <span
+                                            className={`rounded-full px-2 py-1 text-[11px] font-black ${accountItem.relationClassName}`}
+                                          >
+                                            {accountItem.relationLabel}
+                                          </span>
+
+                                          {profileUrl ? (
+                                            <a
+                                              href={profileUrl}
+                                              target="_blank"
+                                              rel="noreferrer"
+                                              className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-black text-white transition hover:bg-slate-700"
+                                              onClick={(event) =>
+                                                event.stopPropagation()
+                                              }
+                                            >
+                                              X에서 확인
+                                            </a>
+                                          ) : (
+                                            <span className="rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-black text-slate-400">
+                                              링크 없음
+                                            </span>
+                                          )}
+                                        </div>
+                                      </div>
+                                    );
+                                  },
+                                )}
+                              </div>
+                            ) : (
+                              <div className="rounded-lg border border-slate-100 bg-white px-4 py-6 text-center">
+                                <p className="text-xs font-black text-slate-500">
+                                  선택한 월에 표시할 계정이 없습니다.
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
 
                   {yearDistribution.length > 8 && (
                     <button
@@ -800,18 +787,18 @@ function MetricCard({
   }[tone];
 
   return (
-    <div className="min-h-[132px] rounded-xl border border-slate-200 bg-white p-4 text-center shadow-sm">
+    <div className="min-h-[118px] rounded-xl border border-slate-200 bg-white p-3 text-center shadow-sm">
       <div className="flex justify-center">
         <div
-          className={`mt-4 flex h-10 w-10 items-center justify-center rounded-full ${toneClass}`}
+          className={`mt-2 flex h-9 w-9 items-center justify-center rounded-full ${toneClass}`}
         >
           <img src={icon} alt={title} className="h-6 w-6 object-contain" />
         </div>
       </div>
 
-      <p className="mt-3 text-xs font-black text-slate-700">{title}</p>
-      <h3 className="mt-3 text-xl font-black tracking-[-0.01em]">{value}</h3>
-      <p className="mt-2 text-[11px] font-bold text-slate-500">{desc}</p>
+      <p className="mt-2 text-xs font-black text-slate-700">{title}</p>
+      <h3 className="mt-2 text-xl font-black tracking-[-0.01em]">{value}</h3>
+      <p className="mt-1.5 text-[11px] font-bold text-slate-500">{desc}</p>
     </div>
   );
 }
@@ -1247,13 +1234,9 @@ function parseAccountCreatedDate(dateText?: string) {
 function getAgeInMonths(date: Date) {
   const now = new Date();
 
-  let months =
+  const months =
     (now.getFullYear() - date.getFullYear()) * 12 +
     (now.getMonth() - date.getMonth());
-
-  if (now.getDate() < date.getDate()) {
-    months -= 1;
-  }
 
   return Math.max(months, 0);
 }

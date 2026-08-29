@@ -4,20 +4,23 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.time.Period;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.server.ResponseStatusException;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -27,6 +30,7 @@ public class AnalysisController {
 
     private static final long TWITTER_SNOWFLAKE_EPOCH = 1288834974657L;
     private static final long MIN_SNOWFLAKE_ID = 1L << 22;
+    private static final long MAX_RELATION_FILE_SIZE = 50L * 1024 * 1024;
     private static final ZoneId KOREA_ZONE = ZoneId.of("Asia/Seoul");
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy.MM.dd");
 
@@ -37,8 +41,14 @@ public class AnalysisController {
             @RequestParam("followersFile") MultipartFile followersFile,
             @RequestParam("followingFile") MultipartFile followingFile
     ) throws IOException {
-        List<Map<String, String>> followerAccounts = extractAccounts(followersFile, "follower");
-        List<Map<String, String>> followingAccounts = extractAccounts(followingFile, "following");
+        String followersContent = readRelationFile(followersFile);
+        String followingContent = readRelationFile(followingFile);
+
+        validateRelationFile(followersFile, followersContent, "follower");
+        validateRelationFile(followingFile, followingContent, "following");
+
+        List<Map<String, String>> followerAccounts = extractAccounts(followersContent, "follower");
+        List<Map<String, String>> followingAccounts = extractAccounts(followingContent, "following");
 
         Set<String> followerIds = extractIds(followerAccounts);
         Set<String> followingIds = extractIds(followingAccounts);
@@ -77,47 +87,140 @@ public class AnalysisController {
         result.put("mutualAccounts", mutualAccounts);
         result.put("nonMutualAccounts", nonMutualAccounts);
         result.put("ageGroups", buildAgeGroups(mutualAccounts, nonMutualAccounts));
+        result.put("nonMutualYearStats", buildNonMutualYearStats(nonMutualAccounts));
 
         return result;
     }
 
-    private List<Map<String, String>> extractAccounts(MultipartFile file, String relationKey) throws IOException {
-        String content = new String(file.getBytes(), StandardCharsets.UTF_8);
+    private String readRelationFile(MultipartFile file) throws IOException {
+        if (file == null || file.isEmpty()) {
+            throw badRequest("비어 있는 파일은 업로드할 수 없습니다.");
+        }
+
+        if (file.getSize() > MAX_RELATION_FILE_SIZE) {
+            throw badRequest("파일 크기가 너무 큽니다.");
+        }
+
+        return new String(file.getBytes(), StandardCharsets.UTF_8);
+    }
+
+    private void validateRelationFile(
+            MultipartFile file,
+            String content,
+            String relationKey
+    ) {
+        String originalFilename = file.getOriginalFilename();
+
+        if (originalFilename == null || originalFilename.isBlank()) {
+            throw badRequest("파일명을 확인할 수 없습니다.");
+        }
+
+        String normalizedFilename = originalFilename.trim().toLowerCase();
+
+        if ("following".equals(relationKey)) {
+            if (!"following.js".equals(normalizedFilename)) {
+                throw badRequest("following.js 파일을 선택해주세요.");
+            }
+        } else if ("follower".equals(relationKey)) {
+            if (!"followers.js".equals(normalizedFilename) && !"follower.js".equals(normalizedFilename)) {
+                throw badRequest("followers.js 파일을 선택해주세요.");
+            }
+        } else {
+            throw badRequest("지원하지 않는 파일 형식입니다.");
+        }
+
+        if (content.isBlank()) {
+            throw badRequest("비어 있는 파일은 업로드할 수 없습니다.");
+        }
+
+        String expectedWrapper = "following".equals(relationKey)
+                ? "window.YTD.following.part"
+                : "window.YTD.follower.part";
+
+        if (!containsArchiveWrapper(content, expectedWrapper)) {
+            throw badRequest(
+                    "지원하지 않는 파일 형식입니다. X 데이터 보관 파일 형식이 변경되었을 수 있습니다."
+            );
+        }
+    }
+
+    private boolean containsArchiveWrapper(String content, String expectedWrapper) {
+        int wrapperIndex = content.indexOf(expectedWrapper);
+
+        if (wrapperIndex < 0) {
+            return false;
+        }
+
+        int equalsIndex = content.indexOf("=", wrapperIndex + expectedWrapper.length());
+
+        if (equalsIndex < 0) {
+            return false;
+        }
+
+        String partText = content.substring(
+                wrapperIndex + expectedWrapper.length(),
+                equalsIndex
+        ).trim();
+
+        if (partText.isEmpty()) {
+            return false;
+        }
+
+        for (int i = 0; i < partText.length(); i++) {
+            if (!Character.isDigit(partText.charAt(i))) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private List<Map<String, String>> extractAccounts(String content, String relationKey) {
         String jsonArrayText = extractJsonArrayText(content);
 
-        List<Map<String, Object>> rows = objectMapper.readValue(
-                jsonArrayText,
-                new TypeReference<List<Map<String, Object>>>() {
-                }
-        );
+        final List<Map<String, Object>> rows;
+
+        try {
+            rows = objectMapper.readValue(
+                    jsonArrayText,
+                    new TypeReference<List<Map<String, Object>>>() {
+                    }
+            );
+        } catch (IOException e) {
+            throw badRequest("파일 내용을 확인할 수 없습니다. 올바른 X 데이터 보관 파일인지 확인해주세요.");
+        }
 
         List<Map<String, String>> accounts = new ArrayList<Map<String, String>>();
 
-        for (Map<String, Object> row : rows) {
+        for (int i = 0; i < rows.size(); i++) {
+            Map<String, Object> row = rows.get(i);
             Object relationObject = row.get(relationKey);
 
-            if (!(relationObject instanceof Map)) {
-                continue;
+            if (!(relationObject instanceof Map<?, ?> relationMap)) {
+                throw badRequest("파일 내용을 확인할 수 없습니다. 올바른 X 데이터 보관 파일인지 확인해주세요.");
             }
 
-            Map<?, ?> relationMap = (Map<?, ?>) relationObject;
             Object accountIdObject = relationMap.get("accountId");
             Object userLinkObject = relationMap.get("userLink");
 
-            if (!(accountIdObject instanceof String)) {
-                continue;
+            if (!(accountIdObject instanceof String accountId) || accountId.isBlank()) {
+                throw badRequest("파일 내용을 확인할 수 없습니다. 올바른 X 데이터 보관 파일인지 확인해주세요.");
             }
 
-            String accountId = (String) accountIdObject;
+            accountId = accountId.trim();
 
-            if (accountId.isBlank()) {
-                continue;
+            if (!isNumericAccountId(accountId)) {
+                throw badRequest("파일 내용을 확인할 수 없습니다. 올바른 X 데이터 보관 파일인지 확인해주세요.");
             }
 
             String userLink = "https://twitter.com/intent/user?user_id=" + accountId;
 
-            if (userLinkObject instanceof String && !((String) userLinkObject).isBlank()) {
-                userLink = (String) userLinkObject;
+            if (userLinkObject != null) {
+                if (!(userLinkObject instanceof String userLinkText) || userLinkText.isBlank()) {
+                    throw badRequest("파일 내용을 확인할 수 없습니다. 올바른 X 데이터 보관 파일인지 확인해주세요.");
+                }
+
+                userLink = userLinkText;
             }
 
             Map<String, String> account = new LinkedHashMap<String, String>();
@@ -147,76 +250,61 @@ public class AnalysisController {
         return accounts;
     }
 
+    private boolean isNumericAccountId(String accountId) {
+        for (int i = 0; i < accountId.length(); i++) {
+            if (!Character.isDigit(accountId.charAt(i))) {
+                return false;
+            }
+        }
+
+        return !accountId.isEmpty();
+    }
+
+    private ResponseStatusException badRequest(String message) {
+        return new ResponseStatusException(HttpStatus.BAD_REQUEST, message);
+    }
+
     private List<Map<String, Object>> buildAgeGroups(
             List<Map<String, String>> mutualAccounts,
             List<Map<String, String>> nonMutualAccounts
     ) {
-        List<Map<String, String>> allAccounts = new ArrayList<Map<String, String>>();
-
-        for (Map<String, String> account : mutualAccounts) {
-            Map<String, String> copiedAccount = new LinkedHashMap<String, String>(account);
-            copiedAccount.put("relation", "mutual");
-            allAccounts.add(copiedAccount);
-        }
-
-        for (Map<String, String> account : nonMutualAccounts) {
-            Map<String, String> copiedAccount = new LinkedHashMap<String, String>(account);
-            copiedAccount.put("relation", "nonMutual");
-            allAccounts.add(copiedAccount);
-        }
-
         List<String> groupOrder = List.of(
-                "1년 미만",
-                "1년 이상",
-                "3년 이상",
-                "5년 이상",
+                "1개월 미만",
+                "1~5개월",
+                "6~11개월",
+                "1~3년",
+                "4~6년",
                 "7년 이상"
         );
 
-        Map<String, List<Map<String, String>>> groupedAccounts = new LinkedHashMap<String, List<Map<String, String>>>();
+        Map<String, List<Map<String, String>>> groupedMutualAccounts =
+                new LinkedHashMap<String, List<Map<String, String>>>();
+        Map<String, List<Map<String, String>>> groupedNonMutualAccounts =
+                new LinkedHashMap<String, List<Map<String, String>>>();
 
         for (String groupLabel : groupOrder) {
-            groupedAccounts.put(groupLabel, new ArrayList<Map<String, String>>());
+            groupedMutualAccounts.put(groupLabel, new ArrayList<Map<String, String>>());
+            groupedNonMutualAccounts.put(groupLabel, new ArrayList<Map<String, String>>());
         }
 
-        for (Map<String, String> account : allAccounts) {
-            String ageGroup = account.get("accountAgeGroup");
-
-            if (ageGroup == null || ageGroup.isBlank()) {
-                ageGroup = "7년 이상";
-            }
-
-            if (!groupedAccounts.containsKey(ageGroup)) {
-                groupedAccounts.put(ageGroup, new ArrayList<Map<String, String>>());
-            }
-
-            groupedAccounts.get(ageGroup).add(account);
-        }
+        groupAccountsByAge(mutualAccounts, groupedMutualAccounts);
+        groupAccountsByAge(nonMutualAccounts, groupedNonMutualAccounts);
 
         List<Map<String, Object>> ageGroups = new ArrayList<Map<String, Object>>();
 
         for (String groupLabel : groupOrder) {
-            List<Map<String, String>> accounts = groupedAccounts.get(groupLabel);
+            List<Map<String, String>> mutualGroup = groupedMutualAccounts.get(groupLabel);
+            List<Map<String, String>> nonMutualGroup = groupedNonMutualAccounts.get(groupLabel);
 
-            int mutualCount = 0;
-            int nonMutualCount = 0;
-
-            for (Map<String, String> account : accounts) {
-                if ("mutual".equals(account.get("relation"))) {
-                    mutualCount++;
-                }
-
-                if ("nonMutual".equals(account.get("relation"))) {
-                    nonMutualCount++;
-                }
-            }
+            int mutualCount = mutualGroup.size();
+            int nonMutualCount = nonMutualGroup.size();
 
             Map<String, Object> group = new LinkedHashMap<String, Object>();
             group.put("label", groupLabel);
-            group.put("totalCount", accounts.size());
+            group.put("totalCount", mutualCount + nonMutualCount);
             group.put("mutualCount", mutualCount);
             group.put("nonMutualCount", nonMutualCount);
-            group.put("monthlyStats", buildMonthlyStats(accounts));
+            group.put("yearStats", buildYearStats(mutualGroup, nonMutualGroup));
 
             ageGroups.add(group);
         }
@@ -224,63 +312,119 @@ public class AnalysisController {
         return ageGroups;
     }
 
-    private List<Map<String, Object>> buildMonthlyStats(List<Map<String, String>> accounts) {
-        Map<String, List<Map<String, String>>> monthlyMap = new LinkedHashMap<String, List<Map<String, String>>>();
-
+    private void groupAccountsByAge(
+            List<Map<String, String>> accounts,
+            Map<String, List<Map<String, String>>> groupedAccounts
+    ) {
         for (Map<String, String> account : accounts) {
-            String monthKey = extractMonthKey(account.get("accountCreatedDate"));
+            String ageGroup = account.get("accountAgeGroup");
 
-            if (!monthlyMap.containsKey(monthKey)) {
-                monthlyMap.put(monthKey, new ArrayList<Map<String, String>>());
+            if (ageGroup == null || ageGroup.isBlank() || !groupedAccounts.containsKey(ageGroup)) {
+                ageGroup = "7년 이상";
             }
 
-            monthlyMap.get(monthKey).add(account);
+            groupedAccounts.get(ageGroup).add(account);
         }
-
-        List<Map<String, Object>> monthlyStats = new ArrayList<Map<String, Object>>();
-
-        for (Map.Entry<String, List<Map<String, String>>> entry : monthlyMap.entrySet()) {
-            String month = entry.getKey();
-            List<Map<String, String>> monthAccounts = entry.getValue();
-
-            int mutualCount = 0;
-            int nonMutualCount = 0;
-
-            List<Map<String, String>> visibleAccounts = new ArrayList<Map<String, String>>();
-
-            for (Map<String, String> account : monthAccounts) {
-                if ("mutual".equals(account.get("relation"))) {
-                    mutualCount++;
-                }
-
-                if ("nonMutual".equals(account.get("relation"))) {
-                    nonMutualCount++;
-                }
-
-                Map<String, String> visibleAccount = new LinkedHashMap<String, String>();
-                visibleAccount.put("accountCreatedDate", account.get("accountCreatedDate"));
-                visibleAccount.put("accountAge", account.get("accountAge"));
-                visibleAccount.put("relation", account.get("relation"));
-                visibleAccount.put("userLink", account.get("userLink"));
-                visibleAccount.put("isLegacyAccount", account.get("isLegacyAccount"));
-
-                visibleAccounts.add(visibleAccount);
-            }
-
-            Map<String, Object> monthlyStat = new LinkedHashMap<String, Object>();
-            monthlyStat.put("month", month);
-            monthlyStat.put("totalCount", monthAccounts.size());
-            monthlyStat.put("mutualCount", mutualCount);
-            monthlyStat.put("nonMutualCount", nonMutualCount);
-            monthlyStat.put("accounts", visibleAccounts);
-
-            monthlyStats.add(monthlyStat);
-        }
-
-        return monthlyStats;
     }
 
-    private String extractMonthKey(String accountCreatedDate) {
+    private List<Map<String, Object>> buildNonMutualYearStats(List<Map<String, String>> nonMutualAccounts) {
+        Map<String, Integer> yearlyCountMap = new LinkedHashMap<String, Integer>();
+
+        for (Map<String, String> account : nonMutualAccounts) {
+            String yearKey = extractYearKey(account.get("accountCreatedDate"));
+
+            if (!yearlyCountMap.containsKey(yearKey)) {
+                yearlyCountMap.put(yearKey, 0);
+            }
+
+            yearlyCountMap.put(yearKey, yearlyCountMap.get(yearKey) + 1);
+        }
+
+        List<Map.Entry<String, Integer>> sortedEntries = new ArrayList<Map.Entry<String, Integer>>(yearlyCountMap.entrySet());
+
+        sortedEntries.sort(
+                Comparator.<Map.Entry<String, Integer>>comparingInt(Map.Entry::getValue)
+                        .reversed()
+                        .thenComparing(Map.Entry::getKey)
+        );
+
+        List<Map<String, Object>> yearStats = new ArrayList<Map<String, Object>>();
+
+        int totalNonMutualCount = nonMutualAccounts.size();
+        int coverageCount = 0;
+
+        for (Map.Entry<String, Integer> entry : sortedEntries) {
+            String year = entry.getKey();
+            int count = entry.getValue();
+
+            coverageCount += count;
+
+            double coverageRate = 0.0;
+
+            if (totalNonMutualCount > 0) {
+                coverageRate = Math.round(((double) coverageCount / totalNonMutualCount) * 1000.0) / 10.0;
+            }
+
+            Map<String, Object> yearStat = new LinkedHashMap<String, Object>();
+            yearStat.put("year", year);
+            yearStat.put("totalCount", count);
+            yearStat.put("coverageCount", coverageCount);
+            yearStat.put("coverageRate", coverageRate);
+            yearStat.put("coverageRateText", formatPercent(coverageRate));
+
+            yearStats.add(yearStat);
+        }
+
+        return yearStats;
+    }
+
+    private List<Map<String, Object>> buildYearStats(
+            List<Map<String, String>> mutualAccounts,
+            List<Map<String, String>> nonMutualAccounts
+    ) {
+        Map<String, int[]> yearlyMap = new TreeMap<String, int[]>();
+
+        for (Map<String, String> account : mutualAccounts) {
+            String yearKey = extractYearKey(account.get("accountCreatedDate"));
+            int[] counts = yearlyMap.computeIfAbsent(yearKey, key -> new int[2]);
+            counts[0]++;
+        }
+
+        for (Map<String, String> account : nonMutualAccounts) {
+            String yearKey = extractYearKey(account.get("accountCreatedDate"));
+            int[] counts = yearlyMap.computeIfAbsent(yearKey, key -> new int[2]);
+            counts[1]++;
+        }
+
+        List<Map<String, Object>> yearStats = new ArrayList<Map<String, Object>>();
+
+        for (Map.Entry<String, int[]> entry : yearlyMap.entrySet()) {
+            String year = entry.getKey();
+            int mutualCount = entry.getValue()[0];
+            int nonMutualCount = entry.getValue()[1];
+            int totalCount = mutualCount + nonMutualCount;
+
+            double nonMutualRate = 0.0;
+
+            if (totalCount > 0) {
+                nonMutualRate = Math.round(((double) nonMutualCount / totalCount) * 1000.0) / 10.0;
+            }
+
+            Map<String, Object> yearStat = new LinkedHashMap<String, Object>();
+            yearStat.put("year", year);
+            yearStat.put("totalCount", totalCount);
+            yearStat.put("mutualCount", mutualCount);
+            yearStat.put("nonMutualCount", nonMutualCount);
+            yearStat.put("nonMutualRate", nonMutualRate);
+            yearStat.put("nonMutualRateText", formatPercent(nonMutualRate));
+
+            yearStats.add(yearStat);
+        }
+
+        return yearStats;
+    }
+
+    private String extractYearKey(String accountCreatedDate) {
         if (accountCreatedDate == null || accountCreatedDate.isBlank()) {
             return "2010년 이전";
         }
@@ -289,12 +433,21 @@ public class AnalysisController {
             return "2010년 이전";
         }
 
-        if (accountCreatedDate.length() >= 7) {
-            return accountCreatedDate.substring(0, 7);
+        if (accountCreatedDate.length() >= 4) {
+            return accountCreatedDate.substring(0, 4);
         }
 
         return "2010년 이전";
     }
+
+    private String formatPercent(double rate) {
+        if (rate == Math.floor(rate)) {
+            return String.valueOf((int) rate) + "%";
+        }
+
+        return String.format("%.1f%%", rate);
+    }
+
 
     private Set<String> extractIds(List<Map<String, String>> accounts) {
         Set<String> ids = new HashSet<String>();
@@ -330,14 +483,19 @@ public class AnalysisController {
 
     private String calculateAccountAgeText(LocalDate accountCreatedDate) {
         LocalDate today = LocalDate.now(KOREA_ZONE);
-        Period period = Period.between(accountCreatedDate, today);
 
-        int years = period.getYears();
-        int months = period.getMonths();
+        int totalMonths =
+                (today.getYear() - accountCreatedDate.getYear()) * 12
+                        + (today.getMonthValue() - accountCreatedDate.getMonthValue());
 
-        if (years <= 0 && months <= 0) {
+        totalMonths = Math.max(totalMonths, 0);
+
+        if (totalMonths < 1) {
             return "1개월 미만";
         }
+
+        int years = totalMonths / 12;
+        int months = totalMonths % 12;
 
         if (years <= 0) {
             return months + "개월";
@@ -352,24 +510,31 @@ public class AnalysisController {
 
     private String calculateAccountAgeGroup(LocalDate accountCreatedDate) {
         LocalDate today = LocalDate.now(KOREA_ZONE);
-        Period period = Period.between(accountCreatedDate, today);
 
-        int years = period.getYears();
+        int totalMonths =
+                (today.getYear() - accountCreatedDate.getYear()) * 12
+                        + (today.getMonthValue() - accountCreatedDate.getMonthValue());
 
-        if (years < 1) {
-            return "1년 미만";
+        totalMonths = Math.max(totalMonths, 0);
+
+        if (totalMonths < 1) {
+            return "1개월 미만";
         }
 
-        if (years < 3) {
-            return "1년 이상";
+        if (totalMonths < 6) {
+            return "1~5개월";
         }
 
-        if (years < 5) {
-            return "3년 이상";
+        if (totalMonths < 12) {
+            return "6~11개월";
         }
 
-        if (years < 7) {
-            return "5년 이상";
+        if (totalMonths < 48) {
+            return "1~3년";
+        }
+
+        if (totalMonths < 84) {
+            return "4~6년";
         }
 
         return "7년 이상";
@@ -380,7 +545,7 @@ public class AnalysisController {
         int endIndex = content.lastIndexOf("]");
 
         if (startIndex == -1 || endIndex == -1 || startIndex >= endIndex) {
-            throw new IllegalArgumentException("파일에서 JSON 배열을 찾을 수 없습니다.");
+            throw badRequest("파일 내용을 확인할 수 없습니다. 올바른 X 데이터 보관 파일인지 확인해주세요.");
         }
 
         return content.substring(startIndex, endIndex + 1);

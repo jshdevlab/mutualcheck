@@ -2,74 +2,82 @@ import { useRef, useState } from "react";
 import type { AnalysisResult } from "../App";
 import AnalyzeModal from "./AnalyzeModal";
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 function UploadPage({
   onAnalysisComplete,
 }: {
   onAnalysisComplete: (result: AnalysisResult) => void;
 }) {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(
-    null,
-  );
+  const [analyzeStep, setAnalyzeStep] = useState(0);
+  const isCanceledRef = useRef(false);
 
-  const handleCancelAnalyze = () => {
-    setIsAnalyzing(false);
-    setAnalysisResult(null);
+  const handleStartAnalyzeModal = () => {
+    isCanceledRef.current = false;
+    setAnalyzeStep(0);
+    setIsAnalyzing(true);
   };
 
-  const handleAnalysisComplete = () => {
-    if (!analysisResult) {
-      setIsAnalyzing(false);
+  const handleCancelAnalyze = () => {
+    isCanceledRef.current = true;
+    setIsAnalyzing(false);
+  };
+
+  const handleAnalysisSuccess = (result: AnalysisResult) => {
+    if (isCanceledRef.current) {
       return;
     }
 
     setIsAnalyzing(false);
-    onAnalysisComplete(analysisResult);
+    onAnalysisComplete(result);
+  };
+
+  const handleAnalysisFail = () => {
+    isCanceledRef.current = true;
+    setIsAnalyzing(false);
   };
 
   return (
     <div className="min-h-screen bg-[#F6F8FB] text-slate-950">
       {isAnalyzing && (
-        <AnalyzeModal
-          onCancel={handleCancelAnalyze}
-          onComplete={handleAnalysisComplete}
-        />
+        <AnalyzeModal step={analyzeStep} onCancel={handleCancelAnalyze} />
       )}
 
-      <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 backdrop-blur">
-        <div className="mx-auto flex max-w-[1280px] items-center justify-between px-5 py-3">
-          <div className="flex items-center gap-3">
+      <header className="border-b border-slate-200 bg-white">
+        <div className="mx-auto flex max-w-[1000px] items-center justify-between px-4 py-1">
+          <div className="flex items-center gap-2">
             <img
               src="/main_1.png"
               alt="MutualCheck logo"
-              className="h-8 w-8 object-contain"
+              className="h-6 w-6 object-contain"
             />
 
-            <h1 className="text-xl font-black tracking-[-0.03em]">
+            <h1 className="text-base font-black tracking-[-0.03em]">
               MutualCheck
             </h1>
           </div>
         </div>
       </header>
 
-      <main className="mx-auto max-w-[1280px] px-5 py-8">
-        <section className="grid grid-cols-1 gap-6 lg:grid-cols-[600px_420px] lg:items-start lg:justify-center">
+      <main className="px-2 py-8">
+        <section className="mx-auto grid max-w-[1000px] grid-cols-1 gap-2 lg:grid-cols-[520px_420px] lg:items-start lg:justify-center">
           <div>
             <div className="inline-flex rounded-full border border-blue-100 bg-blue-50 px-4 py-2 text-sm font-bold text-blue-700">
               X(구 트위터) 맞팔 관계 분석 도구
             </div>
 
-            <h1 className="mt-6 text-4xl font-black leading-[1.12] tracking-[-0.055em] text-slate-950 lg:text-5xl">
+            <h1 className="mt-6 text-4xl font-black leading-[1.12] tracking-[-0.055em] text-slate-950">
               맞팔 상태를 확인하고
               <br />
               AI 추천 결과를 살펴보세요.
             </h1>
 
-            <p className="mt-5 max-w-[560px] text-base leading-7 text-slate-600">
+            <p className="mt-5 max-w-[680px] text-base leading-7 text-slate-600">
               파일을 기반으로 맞팔률과 비맞팔 기간 분포를 확인할 수 있습니다.
             </p>
 
-            <div className="mt-8 max-w-[560px] space-y-4">
+            <div className="mt-8 max-w-[500px] space-y-4">
               <UsageCard />
               <DataPolicyCard />
             </div>
@@ -77,12 +85,11 @@ function UploadPage({
 
           <div className="lg:pt-[75px]">
             <UploadCard
-              onAnalysisStart={() => setIsAnalyzing(true)}
-              onAnalysisSuccess={(result) => setAnalysisResult(result)}
-              onAnalysisFail={() => {
-                setIsAnalyzing(false);
-                setAnalysisResult(null);
-              }}
+              onAnalysisStart={handleStartAnalyzeModal}
+              onAnalysisSuccess={handleAnalysisSuccess}
+              onAnalysisFail={handleAnalysisFail}
+              setAnalyzeStep={setAnalyzeStep}
+              isCanceledRef={isCanceledRef}
             />
           </div>
         </section>
@@ -95,10 +102,14 @@ function UploadCard({
   onAnalysisStart,
   onAnalysisSuccess,
   onAnalysisFail,
+  setAnalyzeStep,
+  isCanceledRef,
 }: {
   onAnalysisStart: () => void;
   onAnalysisSuccess: (result: AnalysisResult) => void;
   onAnalysisFail: () => void;
+  setAnalyzeStep: (step: number) => void;
+  isCanceledRef: React.MutableRefObject<boolean>;
 }) {
   const followingInputRef = useRef<HTMLInputElement | null>(null);
   const followersInputRef = useRef<HTMLInputElement | null>(null);
@@ -148,46 +159,95 @@ function UploadCard({
     return true;
   };
 
+  const extractArchiveRows = (text: string) => {
+    const startIndex = text.indexOf("[");
+    const endIndex = text.lastIndexOf("]");
+
+    if (startIndex === -1 || endIndex === -1 || startIndex >= endIndex) {
+      throw new Error("JSON 배열을 찾을 수 없습니다.");
+    }
+
+    const jsonArrayText = text.slice(startIndex, endIndex + 1);
+    const parsed: unknown = JSON.parse(jsonArrayText);
+
+    if (!Array.isArray(parsed)) {
+      throw new Error("올바른 관계 데이터 형식이 아닙니다.");
+    }
+
+    return parsed;
+  };
+
   const validateArchiveFileContent = async (
     file: File,
     type: "following" | "followers",
   ) => {
     try {
       const text = await readFileText(file);
-      const lowerText = text.toLowerCase();
 
-      if (!lowerText.includes("accountid")) {
-        showError("잘못된 파일입니다.");
+      if (!text.trim()) {
+        showError("비어 있는 파일입니다.");
         return false;
       }
 
-      if (type === "following") {
-        const hasFollowingStructure =
-          lowerText.includes("window.ytd.following") ||
-          lowerText.includes('"following"') ||
-          lowerText.includes("followingaccountid");
+      const expectedKey = type === "following" ? "following" : "follower";
+      const wrapperPattern =
+        type === "following"
+          ? /window\.YTD\.following\.part\d+\s*=/i
+          : /window\.YTD\.follower\.part\d+\s*=/i;
 
-        if (!hasFollowingStructure) {
-          showError("잘못된 파일입니다.");
-          return false;
-        }
+      if (!wrapperPattern.test(text)) {
+        showError(
+          type === "following"
+            ? "X 데이터 보관 파일의 following.js가 아닙니다."
+            : "X 데이터 보관 파일의 followers.js가 아닙니다.",
+        );
+        return false;
       }
 
-      if (type === "followers") {
-        const hasFollowerStructure =
-          lowerText.includes("window.ytd.follower") ||
-          lowerText.includes('"follower"') ||
-          lowerText.includes("followeraccountid");
+      const rows = extractArchiveRows(text);
 
-        if (!hasFollowerStructure) {
-          showError("잘못된 파일입니다.");
+      for (const row of rows) {
+        if (typeof row !== "object" || row === null || Array.isArray(row)) {
+          showError("관계 파일의 데이터 구조가 올바르지 않습니다.");
+          return false;
+        }
+
+        const relation = (row as Record<string, unknown>)[expectedKey];
+
+        if (
+          typeof relation !== "object" ||
+          relation === null ||
+          Array.isArray(relation)
+        ) {
+          showError(
+            type === "following"
+              ? "following 관계 데이터 구조가 올바르지 않습니다."
+              : "follower 관계 데이터 구조가 올바르지 않습니다.",
+          );
+          return false;
+        }
+
+        const accountId = (relation as Record<string, unknown>).accountId;
+
+        if (typeof accountId !== "string" || !/^\d+$/.test(accountId.trim())) {
+          showError("관계 파일에 올바른 accountId가 없습니다.");
+          return false;
+        }
+
+        const userLink = (relation as Record<string, unknown>).userLink;
+
+        if (
+          userLink !== undefined &&
+          (typeof userLink !== "string" || !userLink.trim())
+        ) {
+          showError("관계 파일의 userLink 형식이 올바르지 않습니다.");
           return false;
         }
       }
 
       return true;
     } catch {
-      showError("파일을 확인할 수 없습니다.");
+      showError("파일 내용을 확인할 수 없습니다.");
       return false;
     }
   };
@@ -256,6 +316,47 @@ function UploadCard({
     e.target.value = "";
   };
 
+  const fetchAiReport = async (result: AnalysisResult) => {
+    const response = await fetch("http://localhost:8080/api/ai-report", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        followersCount: result.followersCount,
+        followingCount: result.followingCount,
+        mutualCount: result.mutualCount,
+        nonMutualCount: result.nonMutualCount,
+        mutualRate: result.mutualRate,
+        nonMutualYearStats: result.nonMutualYearStats,
+        ageGroups: result.ageGroups.map((group) => {
+          const nonMutualRate =
+            group.totalCount === 0
+              ? 0
+              : (group.nonMutualCount * 100) / group.totalCount;
+
+          return {
+            label: group.label,
+            totalCount: group.totalCount,
+            mutualCount: group.mutualCount,
+            nonMutualCount: group.nonMutualCount,
+            nonMutualRate,
+            nonMutualRateText: `${nonMutualRate.toFixed(1)}%`,
+            yearStats: group.yearStats ?? [],
+          };
+        }),
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error("AI 리포트 생성에 실패했습니다.");
+    }
+
+    const aiData: { report: string } = await response.json();
+
+    return aiData.report;
+  };
+
   const handleStartAnalyze = async () => {
     clearError();
 
@@ -268,10 +369,19 @@ function UploadCard({
     onAnalysisStart();
 
     try {
+      setAnalyzeStep(0);
+      await sleep(600);
+
+      if (isCanceledRef.current) {
+        return;
+      }
+
       const formData = new FormData();
 
       formData.append("followersFile", followersFile);
       formData.append("followingFile", followingFile);
+
+      setAnalyzeStep(1);
 
       const response = await fetch("/api/analysis/upload", {
         method: "POST",
@@ -284,9 +394,52 @@ function UploadCard({
         throw new Error(data.message || "파일 업로드에 실패했습니다.");
       }
 
+      if (isCanceledRef.current) {
+        return;
+      }
+
+      setAnalyzeStep(2);
+      await sleep(900);
+
+      if (isCanceledRef.current) {
+        return;
+      }
+
       console.log("업로드 API 응답:", data);
 
-      onAnalysisSuccess(data);
+      setAnalyzeStep(3);
+
+      let aiReport = "";
+
+      try {
+        aiReport = await fetchAiReport(data);
+      } catch (error) {
+        console.error("AI 리포트 생성 실패:", error);
+        aiReport = "";
+      }
+
+      if (isCanceledRef.current) {
+        return;
+      }
+
+      setAnalyzeStep(4);
+      await sleep(1000);
+
+      if (isCanceledRef.current) {
+        return;
+      }
+
+      setAnalyzeStep(5);
+      await sleep(800);
+
+      if (isCanceledRef.current) {
+        return;
+      }
+
+      onAnalysisSuccess({
+        ...data,
+        aiReport,
+      });
     } catch (error) {
       onAnalysisFail();
 
@@ -301,23 +454,23 @@ function UploadCard({
   };
 
   return (
-    <section className="rounded-[28px] border border-slate-200 bg-white p-6 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
-      <div className="flex min-h-[500px] flex-col items-center justify-center rounded-3xl border-2 border-dashed border-blue-200 bg-blue-50/30 px-8 py-10 text-center transition hover:border-blue-400 hover:bg-blue-50 hover:shadow-inner">
-        <div className="flex h-16 w-16 items-center justify-center rounded-full bg-blue-100 shadow-sm">
+    <section className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
+      <div className="flex flex-col items-center justify-center rounded-3xl border-2 border-dashed border-blue-200 bg-blue-50/30 px-8 py-8 text-center transition hover:border-blue-400 hover:bg-blue-50 hover:shadow-inner">
+        <div className="flex h-19 w-16 items-center justify-center rounded-full bg-blue-100 shadow-sm">
           <span className="text-3xl">📄</span>
         </div>
 
-        <h3 className="mt-7 text-lg font-black tracking-[-0.03em]">
+        <h3 className="mt-5 text-lg font-black tracking-[-0.03em]">
           관계 파일 업로드
         </h3>
 
-        <p className="mt-4 text-sm leading-6 text-slate-500">
+        <p className="mt-3 text-sm leading-6 text-slate-500">
           압축을 푼 데이터 보관 파일에서
           <br />
           필요한 관계 파일을 각각 선택하세요.
         </p>
 
-        <div className="mt-7 grid w-full max-w-[320px] grid-cols-1 gap-3">
+        <div className="mt-5 grid w-full max-w-[320px] grid-cols-1 gap-3">
           <button
             type="button"
             onClick={() => followersInputRef.current?.click()}
