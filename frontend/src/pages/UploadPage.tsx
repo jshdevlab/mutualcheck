@@ -4,6 +4,13 @@ import AnalyzeModal from "./AnalyzeModal";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+class AiReportLimitError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AiReportLimitError";
+  }
+}
+
 function UploadPage({
   onAnalysisComplete,
 }: {
@@ -190,6 +197,7 @@ function UploadCard({
       }
 
       const expectedKey = type === "following" ? "following" : "follower";
+
       const wrapperPattern =
         type === "following"
           ? /window\.YTD\.following\.part\d+\s*=/i
@@ -201,6 +209,7 @@ function UploadCard({
             ? "X 데이터 보관 파일의 following.js가 아닙니다."
             : "X 데이터 보관 파일의 followers.js가 아닙니다.",
         );
+
         return false;
       }
 
@@ -224,6 +233,7 @@ function UploadCard({
               ? "following 관계 데이터 구조가 올바르지 않습니다."
               : "follower 관계 데이터 구조가 올바르지 않습니다.",
           );
+
           return false;
         }
 
@@ -257,7 +267,9 @@ function UploadCard({
   ) => {
     const file = e.target.files?.[0];
 
-    if (!file) return;
+    if (!file) {
+      return;
+    }
 
     clearError();
 
@@ -289,7 +301,9 @@ function UploadCard({
   ) => {
     const file = e.target.files?.[0];
 
-    if (!file) return;
+    if (!file) {
+      return;
+    }
 
     clearError();
 
@@ -329,6 +343,7 @@ function UploadCard({
         nonMutualCount: result.nonMutualCount,
         mutualRate: result.mutualRate,
         nonMutualYearStats: result.nonMutualYearStats,
+
         ageGroups: result.ageGroups.map((group) => {
           const nonMutualRate =
             group.totalCount === 0
@@ -347,6 +362,27 @@ function UploadCard({
         }),
       }),
     });
+
+    if (response.status === 429) {
+      let message = "현재 AI 이용 한도에 도달했습니다.";
+
+      try {
+        const errorData: {
+          detail?: string;
+          message?: string;
+        } = await response.json();
+
+        if (errorData.detail) {
+          message = errorData.detail;
+        } else if (errorData.message) {
+          message = errorData.message;
+        }
+      } catch {
+        // 429 응답 본문을 읽지 못하면 기본 메시지를 사용한다.
+      }
+
+      throw new AiReportLimitError(message);
+    }
 
     if (!response.ok) {
       throw new Error("AI 리포트 생성에 실패했습니다.");
@@ -414,6 +450,10 @@ function UploadCard({
       try {
         aiReport = await fetchAiReport(data);
       } catch (error) {
+        if (error instanceof AiReportLimitError) {
+          throw error;
+        }
+
         console.error("AI 리포트 생성 실패:", error);
         aiReport = "";
       }
@@ -567,6 +607,7 @@ function CheckItem({ text }: { text: string }) {
   return (
     <div className="flex items-start gap-3">
       <span className="mt-[2px] shrink-0 text-violet-600">✔</span>
+
       <p>{text}</p>
     </div>
   );

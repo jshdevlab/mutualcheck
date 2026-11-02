@@ -35,61 +35,183 @@ public class AnalysisController {
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy.MM.dd");
 
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private final AdminStatsRepository adminStatsRepository;
+    private final AdminErrorLogRepository adminErrorLogRepository;
+
+    public AnalysisController(
+            AdminStatsRepository adminStatsRepository,
+            AdminErrorLogRepository adminErrorLogRepository
+    ) {
+        this.adminStatsRepository = adminStatsRepository;
+        this.adminErrorLogRepository = adminErrorLogRepository;
+    }
 
     @PostMapping("/api/analysis/upload")
     public Map<String, Object> uploadAnalysisFiles(
             @RequestParam("followersFile") MultipartFile followersFile,
             @RequestParam("followingFile") MultipartFile followingFile
     ) throws IOException {
-        String followersContent = readRelationFile(followersFile);
-        String followingContent = readRelationFile(followingFile);
 
-        validateRelationFile(followersFile, followersContent, "follower");
-        validateRelationFile(followingFile, followingContent, "following");
+        try {
+            String followersContent = readRelationFile(followersFile);
+            String followingContent = readRelationFile(followingFile);
 
-        List<Map<String, String>> followerAccounts = extractAccounts(followersContent, "follower");
-        List<Map<String, String>> followingAccounts = extractAccounts(followingContent, "following");
+            validateRelationFile(
+                    followersFile,
+                    followersContent,
+                    "follower"
+            );
 
-        Set<String> followerIds = extractIds(followerAccounts);
-        Set<String> followingIds = extractIds(followingAccounts);
+            validateRelationFile(
+                    followingFile,
+                    followingContent,
+                    "following"
+            );
 
-        List<Map<String, String>> mutualAccounts = new ArrayList<Map<String, String>>();
-        List<Map<String, String>> nonMutualAccounts = new ArrayList<Map<String, String>>();
+            List<Map<String, String>> followerAccounts =
+                    extractAccounts(
+                            followersContent,
+                            "follower"
+                    );
 
-        for (Map<String, String> followingAccount : followingAccounts) {
-            String accountId = followingAccount.get("accountId");
+            List<Map<String, String>> followingAccounts =
+                    extractAccounts(
+                            followingContent,
+                            "following"
+                    );
 
-            if (accountId == null || accountId.isBlank()) {
-                continue;
+            Set<String> followerIds =
+                    extractIds(followerAccounts);
+
+            Set<String> followingIds =
+                    extractIds(followingAccounts);
+
+            List<Map<String, String>> mutualAccounts =
+                    new ArrayList<Map<String, String>>();
+
+            List<Map<String, String>> nonMutualAccounts =
+                    new ArrayList<Map<String, String>>();
+
+            for (Map<String, String> followingAccount
+                    : followingAccounts) {
+
+                String accountId =
+                        followingAccount.get("accountId");
+
+                if (accountId == null
+                        || accountId.isBlank()) {
+                    continue;
+                }
+
+                if (followerIds.contains(accountId)) {
+                    mutualAccounts.add(followingAccount);
+                } else {
+                    nonMutualAccounts.add(followingAccount);
+                }
             }
 
-            if (followerIds.contains(accountId)) {
-                mutualAccounts.add(followingAccount);
-            } else {
-                nonMutualAccounts.add(followingAccount);
+            double mutualRate = 0.0;
+
+            if (!followingIds.isEmpty()) {
+                mutualRate =
+                        Math.round(
+                                ((double) mutualAccounts.size()
+                                        / followingIds.size())
+                                        * 1000.0
+                        ) / 10.0;
             }
+
+            Map<String, Object> result =
+                    new LinkedHashMap<String, Object>();
+
+            result.put("status", "ok");
+            result.put("message", "분석 성공");
+            result.put(
+                    "followersCount",
+                    followerIds.size()
+            );
+            result.put(
+                    "followingCount",
+                    followingIds.size()
+            );
+            result.put(
+                    "mutualCount",
+                    mutualAccounts.size()
+            );
+            result.put(
+                    "nonMutualCount",
+                    nonMutualAccounts.size()
+            );
+            result.put(
+                    "mutualRate",
+                    mutualRate
+            );
+            result.put(
+                    "mutualAccounts",
+                    mutualAccounts
+            );
+            result.put(
+                    "nonMutualAccounts",
+                    nonMutualAccounts
+            );
+            result.put(
+                    "ageGroups",
+                    buildAgeGroups(
+                            mutualAccounts,
+                            nonMutualAccounts
+                    )
+            );
+            result.put(
+                    "nonMutualYearStats",
+                    buildNonMutualYearStats(
+                            nonMutualAccounts
+                    )
+            );
+
+            try {
+                adminStatsRepository
+                        .incrementAnalysisCount();
+
+            } catch (Exception statsException) {
+                System.err.println(
+                        "분석 성공 통계 저장 실패: "
+                                + statsException.getMessage()
+                );
+            }
+
+            return result;
+
+        } catch (ResponseStatusException e) {
+
+            /*
+            * 잘못된 파일명, 잘못된 X 데이터 파일,
+            * 빈 파일, 용량 초과 등 사용자 입력 오류.
+            *
+            * 관리자 최근 오류에는 기록하지 않는다.
+            */
+            throw e;
+
+        } catch (Exception e) {
+
+            /*
+            * 정상적인 사용자 입력 오류가 아닌
+            * 예상하지 못한 서버 분석 오류만 기록한다.
+            */
+            try {
+                adminErrorLogRepository.saveError(
+                        AdminErrorLogRepository.ErrorType.ANALYSIS,
+                        "파일 분석 중 오류가 발생했습니다."
+                );
+
+            } catch (Exception logException) {
+                System.err.println(
+                        "분석 오류 로그 저장 실패: "
+                                + logException.getMessage()
+                );
+            }
+
+            throw e;
         }
-
-        double mutualRate = 0.0;
-
-        if (!followingIds.isEmpty()) {
-            mutualRate = Math.round(((double) mutualAccounts.size() / followingIds.size()) * 1000.0) / 10.0;
-        }
-
-        Map<String, Object> result = new LinkedHashMap<String, Object>();
-        result.put("status", "ok");
-        result.put("message", "분석 성공");
-        result.put("followersCount", followerIds.size());
-        result.put("followingCount", followingIds.size());
-        result.put("mutualCount", mutualAccounts.size());
-        result.put("nonMutualCount", nonMutualAccounts.size());
-        result.put("mutualRate", mutualRate);
-        result.put("mutualAccounts", mutualAccounts);
-        result.put("nonMutualAccounts", nonMutualAccounts);
-        result.put("ageGroups", buildAgeGroups(mutualAccounts, nonMutualAccounts));
-        result.put("nonMutualYearStats", buildNonMutualYearStats(nonMutualAccounts));
-
-        return result;
     }
 
     private String readRelationFile(MultipartFile file) throws IOException {

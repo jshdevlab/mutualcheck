@@ -26,7 +26,7 @@ public class OpenAiService {
                 .build();
     }
 
-    public String generateReport(String analysisSummary) {
+    public OpenAiResult generateReport(String analysisSummary) {
         Map<String, Object> requestBody = Map.of(
                 "model", model,
                 "input", List.of(
@@ -54,17 +54,29 @@ public class OpenAiService {
                 .block();
 
         if (response == null) {
-            return "AI 리포트를 생성하지 못했습니다.";
+            throw new IllegalStateException(
+                    "OpenAI 응답이 비어 있습니다."
+            );
         }
 
-        return extractOutputText(response);
+        String report = extractOutputText(response);
+        TokenUsage tokenUsage = extractTokenUsage(response);
+
+        return new OpenAiResult(
+                report,
+                tokenUsage.inputTokens(),
+                tokenUsage.cachedInputTokens(),
+                tokenUsage.outputTokens()
+        );
     }
 
     private String extractOutputText(Map<?, ?> response) {
         Object output = response.get("output");
 
         if (!(output instanceof List<?> outputList)) {
-            return "AI 응답 형식이 올바르지 않습니다.";
+            throw new IllegalStateException(
+                    "OpenAI 응답 형식이 올바르지 않습니다."
+            );
         }
 
         StringBuilder result = new StringBuilder();
@@ -94,9 +106,74 @@ public class OpenAiService {
         }
 
         if (result.isEmpty()) {
-            return "AI 리포트 내용이 비어 있습니다.";
+            throw new IllegalStateException(
+                    "OpenAI 리포트 내용이 비어 있습니다."
+            );
         }
 
         return result.toString();
+    }
+
+    private TokenUsage extractTokenUsage(Map<?, ?> response) {
+        Object usageObject = response.get("usage");
+
+        if (!(usageObject instanceof Map<?, ?> usageMap)) {
+            throw new IllegalStateException(
+                    "OpenAI 토큰 사용량을 확인할 수 없습니다."
+            );
+        }
+
+        long inputTokens = extractLong(
+                usageMap.get("input_tokens")
+        );
+
+        long outputTokens = extractLong(
+                usageMap.get("output_tokens")
+        );
+
+        long cachedInputTokens = 0;
+
+        Object inputDetailsObject =
+                usageMap.get("input_tokens_details");
+
+        if (inputDetailsObject instanceof Map<?, ?> inputDetailsMap) {
+            Object cachedTokensObject =
+                    inputDetailsMap.get("cached_tokens");
+
+            if (cachedTokensObject instanceof Number number) {
+                cachedInputTokens = number.longValue();
+            }
+        }
+
+        return new TokenUsage(
+                inputTokens,
+                cachedInputTokens,
+                outputTokens
+        );
+    }
+
+    private long extractLong(Object value) {
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+
+        throw new IllegalStateException(
+                "OpenAI 토큰 사용량 형식이 올바르지 않습니다."
+        );
+    }
+
+    private record TokenUsage(
+            long inputTokens,
+            long cachedInputTokens,
+            long outputTokens
+    ) {
+    }
+
+    public record OpenAiResult(
+            String report,
+            long inputTokens,
+            long cachedInputTokens,
+            long outputTokens
+    ) {
     }
 }

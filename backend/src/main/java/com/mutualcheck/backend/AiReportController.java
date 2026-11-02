@@ -1,33 +1,146 @@
-//AI가 무슨 내용을 작성할지...
+// AI가 무슨 내용을 작성할지...
 package com.mutualcheck.backend;
 
 import java.util.List;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 
 @CrossOrigin(origins = "http://localhost:5173")
 @RestController
 public class AiReportController {
 
     private final OpenAiService openAiService;
+    private final AiUsageLimiter aiUsageLimiter;
+    private final AdminStatsRepository adminStatsRepository;
+    private final AdminErrorLogRepository adminErrorLogRepository;
 
-    public AiReportController(OpenAiService openAiService) {
+    public AiReportController(
+            OpenAiService openAiService,
+            AiUsageLimiter aiUsageLimiter,
+            AdminStatsRepository adminStatsRepository,
+            AdminErrorLogRepository adminErrorLogRepository
+    ) {
         this.openAiService = openAiService;
+        this.aiUsageLimiter = aiUsageLimiter;
+        this.adminStatsRepository = adminStatsRepository;
+        this.adminErrorLogRepository = adminErrorLogRepository;
     }
 
     @PostMapping("/api/ai-report")
     public AiReportResponse generateAiReport(@RequestBody AiReportRequest request) {
-        String analysisSummary = buildAnalysisSummary(request);
-        String aiReport = openAiService.generateReport(analysisSummary);
-        String fixedManageTip = buildManageTip(request);
 
-        String report = aiReport.replaceAll(
-                "(?s)3\\. 관리 팁:.*",
-                "3. 관리 팁:\n" + fixedManageTip
-        );
+        AiUsageLimiter.AcquireResult acquireResult =
+                aiUsageLimiter.tryAcquire();
+
+        if (acquireResult == AiUsageLimiter.AcquireResult.DAILY_LIMIT_REACHED) {
+
+            try {
+                adminStatsRepository.incrementAiBlockedCount();
+            } catch (Exception e) {
+                System.err.println(
+                        "AI 일일 한도 차단 통계 저장 실패: "
+                                + e.getMessage()
+                );
+            }
+
+            throw new ResponseStatusException(
+                    HttpStatus.TOO_MANY_REQUESTS,
+                    "오늘 AI 분석 한도에 도달했습니다."
+            );
+        }
+
+        if (acquireResult == AiUsageLimiter.AcquireResult.MONTHLY_LIMIT_REACHED) {
+
+            try {
+                adminStatsRepository.incrementAiBlockedCount();
+            } catch (Exception e) {
+                System.err.println(
+                        "AI 월간 한도 차단 통계 저장 실패: "
+                                + e.getMessage()
+                );
+            }
+
+            throw new ResponseStatusException(
+                    HttpStatus.TOO_MANY_REQUESTS,
+                    "이번 달 AI 분석 한도에 도달했습니다."
+            );
+        }
+
+        String analysisSummary =
+                buildAnalysisSummary(request);
+
+        OpenAiService.OpenAiResult openAiResult;
+
+        try {
+            openAiResult =
+                    openAiService.generateReport(
+                            analysisSummary
+                    );
+
+        } catch (Exception e) {
+
+            try {
+                adminStatsRepository.incrementAiFailureCount();
+            } catch (Exception statsException) {
+                System.err.println(
+                        "AI 실패 통계 저장 실패: "
+                                + statsException.getMessage()
+                );
+            }
+
+            try {
+                adminErrorLogRepository.saveError(
+                        AdminErrorLogRepository.ErrorType.AI,
+                        "AI 리포트 생성 중 오류가 발생했습니다."
+                );
+            } catch (Exception logException) {
+                System.err.println(
+                        "AI 오류 로그 저장 실패: "
+                                + logException.getMessage()
+                );
+            }
+
+            throw e;
+        }
+
+        try {
+            adminStatsRepository.incrementAiSuccessCount();
+        } catch (Exception e) {
+            System.err.println(
+                    "AI 성공 통계 저장 실패: "
+                            + e.getMessage()
+            );
+        }
+
+        try {
+            adminStatsRepository.addAiUsage(
+                    openAiResult.inputTokens(),
+                    openAiResult.cachedInputTokens(),
+                    openAiResult.outputTokens()
+            );
+        } catch (Exception e) {
+            System.err.println(
+                    "AI 토큰 사용량 저장 실패: "
+                            + e.getMessage()
+            );
+        }
+
+        String aiReport =
+                openAiResult.report();
+
+        String fixedManageTip =
+                buildManageTip(request);
+
+        String report =
+                aiReport.replaceAll(
+                        "(?s)3\\. 관리 팁:.*",
+                        "3. 관리 팁:\n" + fixedManageTip
+                );
 
         return new AiReportResponse(report);
     }
@@ -45,18 +158,38 @@ public class AiReportController {
         builder.append("- 원인 추측이 아니라 집계된 분포만 근거로 작성한다.\n\n");
 
         builder.append("전체 집계 결과:\n");
-        builder.append("- 전체 팔로워 수: ").append(request.followersCount()).append("\n");
-        builder.append("- 전체 팔로잉 수: ").append(request.followingCount()).append("\n");
-        builder.append("- 맞팔 수: ").append(request.mutualCount()).append("\n");
-        builder.append("- 비맞팔 수: ").append(request.nonMutualCount()).append("\n");
-        builder.append("- 맞팔률: ").append(formatRate(request.mutualRate())).append("%\n\n");
+        builder.append("- 전체 팔로워 수: ")
+                .append(request.followersCount())
+                .append("\n");
+
+        builder.append("- 전체 팔로잉 수: ")
+                .append(request.followingCount())
+                .append("\n");
+
+        builder.append("- 맞팔 수: ")
+                .append(request.mutualCount())
+                .append("\n");
+
+        builder.append("- 비맞팔 수: ")
+                .append(request.nonMutualCount())
+                .append("\n");
+
+        builder.append("- 맞팔률: ")
+                .append(formatRate(request.mutualRate()))
+                .append("%\n\n");
 
         builder.append("가장 중요한 데이터 - 전체 비맞팔 연도별 분포:\n");
 
-        if (request.nonMutualYearStats() == null || request.nonMutualYearStats().isEmpty()) {
+        if (request.nonMutualYearStats() == null
+                || request.nonMutualYearStats().isEmpty()) {
+
             builder.append("- 전체 비맞팔 연도별 데이터 없음\n\n");
+
         } else {
-            for (NonMutualYearStatRequest yearStat : request.nonMutualYearStats()) {
+
+            for (NonMutualYearStatRequest yearStat
+                    : request.nonMutualYearStats()) {
+
                 builder.append("- ")
                         .append(yearStat.year())
                         .append("년: 비맞팔 ")
@@ -73,10 +206,15 @@ public class AiReportController {
 
         builder.append("보조 데이터 - 계정 생성 구간별 분포:\n");
 
-        if (request.ageGroups() == null || request.ageGroups().isEmpty()) {
+        if (request.ageGroups() == null
+                || request.ageGroups().isEmpty()) {
+
             builder.append("- 구간별 데이터 없음\n\n");
+
         } else {
+
             for (AgeGroupRequest group : request.ageGroups()) {
+
                 builder.append("- ")
                         .append(group.label())
                         .append(": 전체 ")
@@ -89,10 +227,13 @@ public class AiReportController {
                         .append(group.nonMutualRateText())
                         .append("\n");
 
-                if (group.yearStats() != null && !group.yearStats().isEmpty()) {
+                if (group.yearStats() != null
+                        && !group.yearStats().isEmpty()) {
+
                     builder.append("  연도별 상세:\n");
 
                     for (YearStatRequest yearStat : group.yearStats()) {
+
                         builder.append("  - ")
                                 .append(yearStat.year())
                                 .append("년: 전체 ")
@@ -190,49 +331,59 @@ public class AiReportController {
         return builder.toString();
     }
 
- private String buildManageTip(AiReportRequest request) {
-    List<NonMutualYearStatRequest> years = request.nonMutualYearStats();
+    private String buildManageTip(AiReportRequest request) {
+        List<NonMutualYearStatRequest> years =
+                request.nonMutualYearStats();
 
-    if (years == null || years.isEmpty()) {
-        return "연도별 비맞팔 데이터가 없어 우선 확인할 계정을 정하기 어렵습니다.";
-    }
+        if (years == null || years.isEmpty()) {
+            return "연도별 비맞팔 데이터가 없어 우선 확인할 계정을 정하기 어렵습니다.";
+        }
 
-    NonMutualYearStatRequest first = years.get(0);
+        NonMutualYearStatRequest first =
+                years.get(0);
 
-    if (years.size() == 1) {
-        return first.year()
-                + "년 생성 계정에서 비맞팔이 "
+        if (years.size() == 1) {
+            return first.year()
+                    + "년 생성 계정에서 비맞팔이 "
+                    + first.totalCount()
+                    + "명으로 확인됩니다. "
+                    + "해당 연도의 계정부터 확인하면 비맞팔 계정을 효율적으로 검토할 수 있습니다.";
+        }
+
+        int limit =
+                Math.min(3, years.size());
+
+        NonMutualYearStatRequest last =
+                years.get(limit - 1);
+
+        return "비맞팔 계정 수가 많은 생성연도부터 확인해보세요. "
+                + "특히 "
+                + first.year()
+                + "년 생성 계정이 "
                 + first.totalCount()
-                + "명으로 확인됩니다. "
-                + "해당 연도의 계정부터 확인하면 비맞팔 계정을 효율적으로 검토할 수 있습니다.";
-    }
-
-    int limit = Math.min(3, years.size());
-    NonMutualYearStatRequest last = years.get(limit - 1);
-
-    return "비맞팔 계정 수가 많은 생성연도부터 확인해보세요. "
-            + "특히 "
-            + first.year()
-            + "년 생성 계정이 "
-            + first.totalCount()
-            + "명으로 가장 많아 우선 확인하기 좋습니다. "
-            + "상위 "
-            + limit
-            + "개 생성연도만 확인해도 전체 비맞팔 "
-            + request.nonMutualCount()
-            + "명 중 "
-            + last.coverageCount()
-            + "명("
-            + last.coverageRateText()
-            + ")을 검토할 수 있습니다.";
+                + "명으로 가장 많아 우선 확인하기 좋습니다. "
+                + "상위 "
+                + limit
+                + "개 생성연도만 확인해도 전체 비맞팔 "
+                + request.nonMutualCount()
+                + "명 중 "
+                + last.coverageCount()
+                + "명("
+                + last.coverageRateText()
+                + ")을 검토할 수 있습니다.";
     }
 
     private String formatRate(double rate) {
         if (rate == Math.floor(rate)) {
-            return String.valueOf((int) rate);
+            return String.valueOf(
+                    (int) rate
+            );
         }
 
-        return String.format("%.1f", rate);
+        return String.format(
+                "%.1f",
+                rate
+        );
     }
 
     public record AiReportRequest(
