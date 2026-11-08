@@ -1,4 +1,5 @@
-package com.mutualcheck.backend;
+// DynamoDB 통계 조회·저장
+package com.mutualcheck.backend.admin;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;

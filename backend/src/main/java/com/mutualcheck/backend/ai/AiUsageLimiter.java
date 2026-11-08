@@ -1,4 +1,5 @@
-package com.mutualcheck.backend;
+// 일 300회·월 5,000회 제한
+package com.mutualcheck.backend.ai;
 
 import org.springframework.stereotype.Service;
 

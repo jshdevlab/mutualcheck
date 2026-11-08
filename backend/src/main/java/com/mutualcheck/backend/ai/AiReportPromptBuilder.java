@@ -1,151 +1,19 @@
-// AI가 무슨 내용을 작성할지...
-package com.mutualcheck.backend;
+// AI 프롬프트 구성, 관리 팁 생성
+package com.mutualcheck.backend.ai;
 
 import java.util.List;
 
-import org.springframework.http.HttpStatus;
-import org.springframework.web.bind.annotation.CrossOrigin;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.server.ResponseStatusException;
+import com.mutualcheck.backend.ai.dto.AiReportRequest;
+import com.mutualcheck.backend.ai.dto.AiReportRequest.NonMutualYearStatRequest;
+import com.mutualcheck.backend.ai.dto.AiReportRequest.AgeGroupRequest;
+import com.mutualcheck.backend.ai.dto.AiReportRequest.YearStatRequest;
 
-@CrossOrigin(origins = "http://localhost:5173")
-@RestController
-public class AiReportController {
+import org.springframework.stereotype.Component;
 
-    private final OpenAiService openAiService;
-    private final AiUsageLimiter aiUsageLimiter;
-    private final AdminStatsRepository adminStatsRepository;
-    private final AdminErrorLogRepository adminErrorLogRepository;
+@Component
+public class AiReportPromptBuilder {
 
-    public AiReportController(
-            OpenAiService openAiService,
-            AiUsageLimiter aiUsageLimiter,
-            AdminStatsRepository adminStatsRepository,
-            AdminErrorLogRepository adminErrorLogRepository
-    ) {
-        this.openAiService = openAiService;
-        this.aiUsageLimiter = aiUsageLimiter;
-        this.adminStatsRepository = adminStatsRepository;
-        this.adminErrorLogRepository = adminErrorLogRepository;
-    }
-
-    @PostMapping("/api/ai-report")
-    public AiReportResponse generateAiReport(@RequestBody AiReportRequest request) {
-
-        AiUsageLimiter.AcquireResult acquireResult =
-                aiUsageLimiter.tryAcquire();
-
-        if (acquireResult == AiUsageLimiter.AcquireResult.DAILY_LIMIT_REACHED) {
-
-            try {
-                adminStatsRepository.incrementAiBlockedCount();
-            } catch (Exception e) {
-                System.err.println(
-                        "AI 일일 한도 차단 통계 저장 실패: "
-                                + e.getMessage()
-                );
-            }
-
-            throw new ResponseStatusException(
-                    HttpStatus.TOO_MANY_REQUESTS,
-                    "오늘 AI 분석 한도에 도달했습니다."
-            );
-        }
-
-        if (acquireResult == AiUsageLimiter.AcquireResult.MONTHLY_LIMIT_REACHED) {
-
-            try {
-                adminStatsRepository.incrementAiBlockedCount();
-            } catch (Exception e) {
-                System.err.println(
-                        "AI 월간 한도 차단 통계 저장 실패: "
-                                + e.getMessage()
-                );
-            }
-
-            throw new ResponseStatusException(
-                    HttpStatus.TOO_MANY_REQUESTS,
-                    "이번 달 AI 분석 한도에 도달했습니다."
-            );
-        }
-
-        String analysisSummary =
-                buildAnalysisSummary(request);
-
-        OpenAiService.OpenAiResult openAiResult;
-
-        try {
-            openAiResult =
-                    openAiService.generateReport(
-                            analysisSummary
-                    );
-
-        } catch (Exception e) {
-
-            try {
-                adminStatsRepository.incrementAiFailureCount();
-            } catch (Exception statsException) {
-                System.err.println(
-                        "AI 실패 통계 저장 실패: "
-                                + statsException.getMessage()
-                );
-            }
-
-            try {
-                adminErrorLogRepository.saveError(
-                        AdminErrorLogRepository.ErrorType.AI,
-                        "AI 리포트 생성 중 오류가 발생했습니다."
-                );
-            } catch (Exception logException) {
-                System.err.println(
-                        "AI 오류 로그 저장 실패: "
-                                + logException.getMessage()
-                );
-            }
-
-            throw e;
-        }
-
-        try {
-            adminStatsRepository.incrementAiSuccessCount();
-        } catch (Exception e) {
-            System.err.println(
-                    "AI 성공 통계 저장 실패: "
-                            + e.getMessage()
-            );
-        }
-
-        try {
-            adminStatsRepository.addAiUsage(
-                    openAiResult.inputTokens(),
-                    openAiResult.cachedInputTokens(),
-                    openAiResult.outputTokens()
-            );
-        } catch (Exception e) {
-            System.err.println(
-                    "AI 토큰 사용량 저장 실패: "
-                            + e.getMessage()
-            );
-        }
-
-        String aiReport =
-                openAiResult.report();
-
-        String fixedManageTip =
-                buildManageTip(request);
-
-        String report =
-                aiReport.replaceAll(
-                        "(?s)3\\. 관리 팁:.*",
-                        "3. 관리 팁:\n" + fixedManageTip
-                );
-
-        return new AiReportResponse(report);
-    }
-
-    private String buildAnalysisSummary(AiReportRequest request) {
+    public String buildAnalysisSummary(AiReportRequest request) {
         StringBuilder builder = new StringBuilder();
 
         builder.append("다음은 Twitter/X 맞팔 분석 결과다.\n\n");
@@ -331,7 +199,7 @@ public class AiReportController {
         return builder.toString();
     }
 
-    private String buildManageTip(AiReportRequest request) {
+    public String buildManageTip(AiReportRequest request) {
         List<NonMutualYearStatRequest> years =
                 request.nonMutualYearStats();
 
@@ -386,47 +254,4 @@ public class AiReportController {
         );
     }
 
-    public record AiReportRequest(
-            int followersCount,
-            int followingCount,
-            int mutualCount,
-            int nonMutualCount,
-            double mutualRate,
-            List<NonMutualYearStatRequest> nonMutualYearStats,
-            List<AgeGroupRequest> ageGroups
-    ) {
-    }
-
-    public record NonMutualYearStatRequest(
-            String year,
-            int totalCount,
-            int coverageCount,
-            double coverageRate,
-            String coverageRateText
-    ) {
-    }
-
-    public record AgeGroupRequest(
-            String label,
-            int totalCount,
-            int mutualCount,
-            int nonMutualCount,
-            double nonMutualRate,
-            String nonMutualRateText,
-            List<YearStatRequest> yearStats
-    ) {
-    }
-
-    public record YearStatRequest(
-            String year,
-            int totalCount,
-            int mutualCount,
-            int nonMutualCount
-    ) {
-    }
-
-    public record AiReportResponse(
-            String report
-    ) {
-    }
 }

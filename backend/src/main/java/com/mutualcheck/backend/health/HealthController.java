@@ -1,4 +1,4 @@
-package com.mutualcheck.backend;
+package com.mutualcheck.backend.health;
 
 import java.util.Map;
 

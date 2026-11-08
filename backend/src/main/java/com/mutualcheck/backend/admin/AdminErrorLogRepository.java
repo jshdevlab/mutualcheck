@@ -1,4 +1,5 @@
-package com.mutualcheck.backend;
+// DynamoDB에 오류 로그 저장 및 최근 오류 조회
+package com.mutualcheck.backend.admin;
 
 import java.time.Instant;
 import java.time.ZoneId;

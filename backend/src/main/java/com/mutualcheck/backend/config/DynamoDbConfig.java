@@ -1,4 +1,4 @@
-package com.mutualcheck.backend;
+package com.mutualcheck.backend.config;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;

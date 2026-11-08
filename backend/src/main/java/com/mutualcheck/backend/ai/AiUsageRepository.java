@@ -1,4 +1,5 @@
-package com.mutualcheck.backend;
+// DynamoDB 사용 횟수 관리
+package com.mutualcheck.backend.ai;
 
 import java.time.LocalDate;
 import java.time.YearMonth;

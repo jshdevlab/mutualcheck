@@ -1,5 +1,5 @@
 // API 연결 설정
-package com.mutualcheck.backend;
+package com.mutualcheck.backend.ai;
 
 import java.util.List;
 import java.util.Map;

@@ -1,4 +1,5 @@
-package com.mutualcheck.backend;
+// 프론트엔드의 오류 로그 조회 요청을 받아 결과 반환
+package com.mutualcheck.backend.admin;
 
 import java.util.List;
 
