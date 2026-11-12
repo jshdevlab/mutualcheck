@@ -1,6 +1,7 @@
+// 업로드 화면 전체 구성
 import { useRef, useState } from "react";
 import type { AnalysisResult } from "../App";
-import AnalyzeModal from "./AnalyzeModal";
+import AnalyzeModal from "../components/upload/AnalyzeModal";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 

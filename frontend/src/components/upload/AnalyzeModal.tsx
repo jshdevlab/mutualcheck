@@ -1,3 +1,4 @@
+// 분석 진행 모달 UI 및 단계별 진행 상태 표시
 function AnalyzeModal({
   step,
   onCancel,
